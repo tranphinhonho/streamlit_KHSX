@@ -12,7 +12,14 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, ImageGrab
 from streamlit_paste_button import paste_image_button
-import win32com.client
+
+# win32com chỉ hoạt động trên Windows
+try:
+    import win32com.client
+    HAS_WIN32 = True
+except ImportError:
+    win32com = None
+    HAS_WIN32 = False
 
 from utils.email_utils import send_outlook_email
 from utils.ocr_utils import (
@@ -199,6 +206,9 @@ def _render_email_form(row: Dict[str, str], image: Image.Image, current_user: st
         
         # Nếu chọn Display, chỉ hiển thị email
         if display_mail:
+            if not HAS_WIN32:
+                st.error("❌ Tính năng này chỉ hoạt động trên Windows với Outlook.")
+                return
             try:
                 attachment_path = _save_temp_attachment(image)
                 
