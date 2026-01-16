@@ -1,0 +1,45 @@
+# .gitignore for B7KHSX Streamlit App
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+*.env
+
+# Database (local SQLite - will be different on cloud)
+*.db
+*.sqlite
+*.sqlite3
+
+# Downloads and temp files
+downloads/
+*.bak
+
+# Excel files (data files - too large for git)
+EXCEL/
+*.xlsm
+*.xlsx
+
+# Secrets (never commit!)
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Backup files
+*_backup*

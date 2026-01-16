@@ -1,0 +1,27 @@
+# Core
+streamlit
+pandas
+numpy
+openpyxl
+
+# UI Components
+streamlit_option_menu
+streamlit_antd_components
+streamlit-paste-button
+
+# Authentication
+streamlit_authenticator==0.3.3
+bcrypt
+
+# AI
+google-generativeai
+
+# Images
+Pillow
+
+# API (for future use)
+requests
+msal
+
+# Note: pywin32 removed - not compatible with Linux (Streamlit Cloud)
+# Outlook email features will use file upload instead on cloud

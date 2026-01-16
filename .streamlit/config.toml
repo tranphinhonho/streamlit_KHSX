@@ -1,0 +1,29 @@
+[server]
+# Bật tự động reload khi file thay đổi
+runOnSave = true
+
+# Cổng mặc định
+port = 8501
+
+# Tắt file watcher để tránh lỗi "Paths don't have the same drive"
+fileWatcherType = "none"
+
+# Tắt CORS (nếu cần)
+enableCORS = false
+
+# Tắt XSRF protection (chỉ dùng local)
+enableXsrfProtection = false
+
+[browser]
+# Tự động mở browser khi chạy
+gatherUsageStats = false
+
+[runner]
+# Tự động reload khi có thay đổi
+magicEnabled = true
+fastReruns = true
+
+[client]
+# Hiển thị toolbar developer
+toolbarMode = "auto"
+showErrorDetails = "stacktrace"

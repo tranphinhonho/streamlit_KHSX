@@ -1,0 +1,572 @@
+"""
+Module import dữ liệu từ file FFSTOCK Excel vào database
+Parse theo logic VBA: BRAN (hàng 13+) và INTGRATE (hàng 10+)
+"""
+
+from __future__ import annotations
+import sqlite3
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+import pandas as pd
+
+
+class StockImporter:
+    """Class xử lý import FFSTOCK Excel vào database"""
+    
+    # Cấu hình sheet nguồn
+    SHEET_BRAN = "BRAN"
+    SHEET_INTGRATE = "INTGRATE"
+    
+    # Hàng bắt đầu dữ liệu (0-indexed)
+    START_ROW_BRAN = 12       # Hàng 13 trong Excel
+    START_ROW_INTGRATE = 9    # Hàng 10 trong Excel
+    
+    # Mapping cột cho sheet BRAN (0-indexed: A=0, B=1, ...)
+    # Code cám ở cột W=22
+    COL_MAPPING_BRAN = {
+        'code_cam': 22,       # Cột W - Code cám
+        'ten_cam': 1,         # Cột B - Tên cám
+        'kich_co_ep': 2,      # Cột C - Kích cỡ ép viên
+        'kich_co_bao': 3,     # Cột D - Kích cỡ đóng bao (25/40/50)
+        'ton_kho_bao': 12,    # Cột M - Tồn kho (bao)
+        'ton_kho_kg': 13,     # Cột N - Tồn kho (kg)
+        'day_on_hand': 18,    # Cột S - Day on hand
+    }
+    
+    # Mapping cột cho sheet INTGRATE (khác với BRAN!)
+    # Code cám ở cột Z=25, Tồn kho ở cột O=14 (bao) và P=15 (kg)
+    COL_MAPPING_INTGRATE = {
+        'code_cam': 25,       # Cột Z - Code cám (khác với BRAN!)
+        'ten_cam': 1,         # Cột B - Tên cám
+        'kich_co_ep': 2,      # Cột C - Kích cỡ ép viên
+        'kich_co_bao': 3,     # Cột D - Kích cỡ đóng bao (25/40/50)
+        'ton_kho_bao': 14,    # Cột O - Tồn kho (bao) - KHÁC BRAN!
+        'ton_kho_kg': 15,     # Cột P - Tồn kho (kg) - KHÁC BRAN!
+        'day_on_hand': 20,    # Cột U - Day on hand
+    }
+    
+    # Kích cỡ bao hợp lệ
+    VALID_PACK_SIZES = [25, 40, 50]
+    
+    def __init__(self, db_path: str = "database_new.db"):
+        """
+        Khởi tạo StockImporter
+        
+        Args:
+            db_path: Đường dẫn database SQLite
+        """
+        self.db_path = db_path
+    
+    def _get_connection(self) -> sqlite3.Connection:
+        """Tạo connection đến database"""
+        return sqlite3.connect(self.db_path)
+    
+    def _ensure_import_log_table(self):
+        """Tạo bảng EmailImportLog nếu chưa có"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS EmailImportLog (
+                ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                TenFile TEXT NOT NULL UNIQUE,
+                NgayEmail DATE,
+                LoaiFile TEXT NOT NULL,
+                SoLuongDong INTEGER DEFAULT 0,
+                ThoiGianImport DATETIME DEFAULT CURRENT_TIMESTAMP,
+                NguoiImport TEXT
+            )
+        """)
+        
+        conn.commit()
+        conn.close()
+    
+    def check_duplicate(self, filename: str) -> bool:
+        """
+        Kiểm tra file đã được import chưa
+        
+        Returns:
+            True nếu đã import (duplicate)
+        """
+        self._ensure_import_log_table()
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT ID FROM EmailImportLog WHERE TenFile = ?",
+            (filename,)
+        )
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        return result is not None
+    
+    def _log_import(
+        self, 
+        filename: str, 
+        loai_file: str,
+        so_luong: int,
+        ngay_email: Optional[str] = None,
+        nguoi_import: Optional[str] = None
+    ):
+        """Ghi log import vào database"""
+        self._ensure_import_log_table()
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO EmailImportLog 
+            (TenFile, NgayEmail, LoaiFile, SoLuongDong, NguoiImport)
+            VALUES (?, ?, ?, ?, ?)
+        """, (filename, ngay_email, loai_file, so_luong, nguoi_import))
+        
+        conn.commit()
+        conn.close()
+    
+    def _delete_old_import(self, filename: str):
+        """
+        Xóa dữ liệu import cũ trước khi import lại
+        
+        Args:
+            filename: Tên file đã import
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Lấy thông tin log cũ
+        cursor.execute("""
+            SELECT NgayEmail FROM EmailImportLog WHERE TenFile = ?
+        """, (filename,))
+        result = cursor.fetchone()
+        
+        if result:
+            ngay_email = result[0]
+            
+            # Xóa các record StockOld theo ngày
+            # Lưu ý: Xóa mềm (set Đã xóa = 1)
+            cursor.execute("""
+                UPDATE StockOld 
+                SET [Đã xóa] = 1, 
+                    [Người sửa] = 'system_reimport',
+                    [Thời gian sửa] = datetime('now')
+                WHERE [Ngày stock old] = ?
+            """, (ngay_email,))
+            
+            deleted_count = cursor.rowcount
+            print(f"🗑️ Đã xóa mềm {deleted_count} record StockOld cũ (ngày {ngay_email})")
+            
+            # Xóa log import cũ
+            cursor.execute("""
+                DELETE FROM EmailImportLog WHERE TenFile = ?
+            """, (filename,))
+            print(f"🗑️ Đã xóa log import cũ: {filename}")
+        
+        conn.commit()
+        conn.close()
+    
+    def _get_product_id(self, cursor, code_cam: str) -> Optional[int]:
+        """Tìm ID sản phẩm từ Code cám"""
+        cursor.execute("""
+            SELECT ID 
+            FROM SanPham 
+            WHERE TRIM([Code cám]) = ? AND [Đã xóa] = 0
+        """, (code_cam.strip(),))
+        
+        result = cursor.fetchone()
+        return result[0] if result else None
+    
+    def _add_missing_product(
+        self, 
+        cursor, 
+        code_cam: str, 
+        ten_cam: str, 
+        kich_co_ep: str, 
+        kich_co_bao: int,
+        nguoi_tao: str = "system_auto"
+    ) -> Optional[int]:
+        """
+        Tự động thêm sản phẩm thiếu vào database
+        
+        Returns:
+            ID của sản phẩm vừa thêm, hoặc None nếu lỗi
+        """
+        try:
+            cursor.execute("""
+                INSERT INTO SanPham 
+                ([Code cám], [Tên cám], [Kích cỡ ép viên], [Kích cỡ đóng bao],
+                 [Người tạo], [Thời gian tạo], [Đã xóa])
+                VALUES (?, ?, ?, ?, ?, datetime('now'), 0)
+            """, (code_cam, ten_cam, kich_co_ep, kich_co_bao, nguoi_tao))
+            
+            # Lấy ID vừa insert
+            return cursor.lastrowid
+            
+        except Exception as e:
+            print(f"❌ Lỗi thêm sản phẩm {code_cam}: {e}")
+            return None
+    
+    def _generate_stock_code(self, cursor) -> str:
+        """Tạo mã Stock Old tự động (SO00001, SO00002...)"""
+        cursor.execute("""
+            SELECT MAX([Mã stock old]) 
+            FROM StockOld 
+            WHERE [Mã stock old] LIKE 'SO%'
+        """)
+        
+        result = cursor.fetchone()[0]
+        
+        if result:
+            last_num = int(result[2:])
+            next_num = last_num + 1
+        else:
+            next_num = 1
+        
+        return f"SO{next_num:05d}"
+    
+    def _clean_pellet_size(self, value) -> str:
+        """Làm sạch kích cỡ ép viên (loại bỏ P và khoảng trắng)"""
+        if pd.isna(value):
+            return ""
+        s = str(value)
+        s = s.replace(" ", "").replace("P", "").replace("p", "")
+        return s
+    
+    def _parse_sheet(self, df: pd.DataFrame, sheet_name: str) -> List[Dict]:
+        """
+        Parse dữ liệu từ một sheet
+        
+        Returns:
+            List các dict chứa dữ liệu sản phẩm
+        """
+        data = []
+        
+        # Chọn column mapping dựa vào sheet name
+        if sheet_name == self.SHEET_INTGRATE:
+            col_map = self.COL_MAPPING_INTGRATE
+        else:
+            col_map = self.COL_MAPPING_BRAN
+        
+        for idx, row in df.iterrows():
+            try:
+                # Lấy kích cỡ đóng bao (cột D)
+                kich_co_bao = row.iloc[col_map['kich_co_bao']]
+                
+                # Lọc chỉ lấy 25, 40, 50
+                try:
+                    kich_co_bao = int(float(kich_co_bao))
+                except:
+                    continue
+                
+                if kich_co_bao not in self.VALID_PACK_SIZES:
+                    continue
+                
+                # Lấy tồn kho (kg) - cột N
+                ton_kho_kg = row.iloc[col_map['ton_kho_kg']]
+                try:
+                    ton_kho_kg = int(float(ton_kho_kg))
+                except:
+                    ton_kho_kg = 0
+                
+                # Bỏ qua nếu tồn kho = 0
+                if ton_kho_kg == 0:
+                    continue
+                
+                # Lấy các thông tin khác
+                code_cam = row.iloc[col_map['code_cam']]
+                if pd.isna(code_cam) or str(code_cam).strip() == "":
+                    continue
+                code_cam = str(code_cam).strip()
+                
+                ten_cam = row.iloc[col_map['ten_cam']]
+                ten_cam = str(ten_cam).strip() if not pd.isna(ten_cam) else ""
+                
+                # Loại bỏ sản phẩm có (5*5)
+                if "(5*5)" in ten_cam:
+                    continue
+                
+                kich_co_ep = self._clean_pellet_size(
+                    row.iloc[col_map['kich_co_ep']]
+                )
+                
+                ton_kho_bao = row.iloc[col_map['ton_kho_bao']]
+                try:
+                    ton_kho_bao = int(float(ton_kho_bao))
+                except:
+                    ton_kho_bao = 0
+                
+                day_on_hand = row.iloc[col_map['day_on_hand']]
+                try:
+                    day_on_hand = float(day_on_hand)
+                except:
+                    day_on_hand = 0.0
+                
+                data.append({
+                    'code_cam': code_cam,
+                    'ten_cam': ten_cam,
+                    'kich_co_ep': kich_co_ep,
+                    'kich_co_bao': kich_co_bao,
+                    'ton_kho_bao': ton_kho_bao,
+                    'ton_kho_kg': ton_kho_kg,
+                    'day_on_hand': day_on_hand,
+                    'sheet': sheet_name
+                })
+                
+            except Exception as e:
+                print(f"Lỗi parse row {idx}: {e}")
+                continue
+        
+        return data
+    
+    def import_ffstock(
+        self,
+        file_path: str | Path,
+        nguoi_import: str = "system",
+        ngay_stock: Optional[str] = None,
+        overwrite: bool = False,
+        auto_add_missing: bool = True
+    ) -> Dict:
+        """
+        Import file FFSTOCK vào database StockOld
+        
+        Args:
+            file_path: Đường dẫn file Excel
+            nguoi_import: Username người import
+            ngay_stock: Ngày stock (YYYY-MM-DD), mặc định là hôm nay
+            overwrite: Nếu True, xóa dữ liệu cũ trước khi import lại
+            auto_add_missing: Nếu True, tự động thêm sản phẩm thiếu vào database
+            
+        Returns:
+            Dict kết quả: {success, not_found, errors, ma_stock_old, auto_added}
+        """
+        file_path = Path(file_path)
+        filename = file_path.name
+        
+        # Kiểm tra trùng lặp
+        is_duplicate = self.check_duplicate(filename)
+        
+        if is_duplicate and not overwrite:
+            return {
+                'success': 0,
+                'not_found': [],
+                'errors': [f"File '{filename}' đã được import trước đó"],
+                'ma_stock_old': None,
+                'skipped': True
+            }
+        
+        # Nếu overwrite, xóa dữ liệu cũ
+        if is_duplicate and overwrite:
+            self._delete_old_import(filename)
+        
+        # Đọc dữ liệu từ cả 2 sheet
+        all_data = []
+        
+        try:
+            # Đọc sheet BRAN
+            try:
+                df_bran = pd.read_excel(
+                    file_path, 
+                    sheet_name=self.SHEET_BRAN,
+                    header=None,
+                    skiprows=self.START_ROW_BRAN
+                )
+                data_bran = self._parse_sheet(df_bran, self.SHEET_BRAN)
+                all_data.extend(data_bran)
+                print(f"✅ BRAN: {len(data_bran)} sản phẩm")
+            except Exception as e:
+                print(f"⚠️ Không đọc được sheet BRAN: {e}")
+            
+            # Đọc sheet INTGRATE
+            try:
+                df_int = pd.read_excel(
+                    file_path,
+                    sheet_name=self.SHEET_INTGRATE,
+                    header=None,
+                    skiprows=self.START_ROW_INTGRATE
+                )
+                data_int = self._parse_sheet(df_int, self.SHEET_INTGRATE)
+                all_data.extend(data_int)
+                print(f"✅ INTGRATE: {len(data_int)} sản phẩm")
+            except Exception as e:
+                print(f"⚠️ Không đọc được sheet INTGRATE: {e}")
+                
+        except Exception as e:
+            return {
+                'success': 0,
+                'not_found': [],
+                'errors': [f"Lỗi đọc file Excel: {e}"],
+                'ma_stock_old': None,
+                'skipped': False
+            }
+        
+        if not all_data:
+            return {
+                'success': 0,
+                'not_found': [],
+                'errors': ["Không tìm thấy dữ liệu hợp lệ trong file"],
+                'ma_stock_old': None,
+                'skipped': False
+            }
+        
+        print(f"📊 Tổng cộng: {len(all_data)} sản phẩm cần import")
+        
+        # Import vào database
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        ma_stock_old = self._generate_stock_code(cursor)
+        ngay_stock_old = ngay_stock or datetime.now().strftime('%Y-%m-%d')
+        thoi_gian_tao = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        success_count = 0
+        not_found = []
+        auto_added = []
+        errors = []
+        
+        for item in all_data:
+            try:
+                # Tìm ID sản phẩm
+                id_sanpham = self._get_product_id(cursor, item['code_cam'])
+                
+                if not id_sanpham:
+                    # Nếu bật auto_add_missing, tự động thêm sản phẩm
+                    if auto_add_missing:
+                        id_sanpham = self._add_missing_product(
+                            cursor,
+                            code_cam=item['code_cam'],
+                            ten_cam=item['ten_cam'],
+                            kich_co_ep=item['kich_co_ep'],
+                            kich_co_bao=item['kich_co_bao'],
+                            nguoi_tao=nguoi_import
+                        )
+                        
+                        if id_sanpham:
+                            auto_added.append({
+                                'code': item['code_cam'],
+                                'ten': item['ten_cam'],
+                                'kich_co_ep': item['kich_co_ep'],
+                                'kich_co_bao': item['kich_co_bao']
+                            })
+                            print(f"✅ Tự động thêm sản phẩm: {item['code_cam']} - {item['ten_cam']}")
+                        else:
+                            not_found.append(item['code_cam'])
+                            continue
+                    else:
+                        not_found.append(item['code_cam'])
+                        continue
+                
+                # Insert vào StockOld
+                cursor.execute("""
+                    INSERT INTO StockOld 
+                    ([ID sản phẩm], [Mã stock old], [Số lượng], [Ngày stock old], 
+                     [Ghi chú], [Người tạo], [Thời gian tạo], [Đã xóa])
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                """, (
+                    id_sanpham,
+                    ma_stock_old,
+                    item['ton_kho_kg'],
+                    ngay_stock_old,
+                    f"Day On Hand: {item['day_on_hand']:.1f} | Bao: {item['ton_kho_bao']}",
+                    nguoi_import,
+                    thoi_gian_tao
+                ))
+                
+                success_count += 1
+                
+            except Exception as e:
+                errors.append(f"{item['code_cam']}: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        # Ghi log import
+        if success_count > 0:
+            self._log_import(
+                filename=filename,
+                loai_file='FFSTOCK',
+                so_luong=success_count,
+                ngay_email=ngay_stock_old,
+                nguoi_import=nguoi_import
+            )
+        
+        return {
+            'success': success_count,
+            'not_found': not_found,
+            'auto_added': auto_added,
+            'errors': errors,
+            'ma_stock_old': ma_stock_old,
+            'skipped': False
+        }
+    
+    def get_import_history(self, limit: int = 20) -> List[Dict]:
+        """Lấy lịch sử import"""
+        self._ensure_import_log_table()
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT ID, TenFile, NgayEmail, LoaiFile, SoLuongDong, 
+                   ThoiGianImport, NguoiImport
+            FROM EmailImportLog
+            ORDER BY ThoiGianImport DESC
+            LIMIT ?
+        """, (limit,))
+        
+        columns = ['ID', 'TenFile', 'NgayEmail', 'LoaiFile', 
+                   'SoLuongDong', 'ThoiGianImport', 'NguoiImport']
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append(dict(zip(columns, row)))
+        
+        conn.close()
+        return results
+
+
+def test_stock_importer():
+    """Test function"""
+    print("=" * 60)
+    print("🔍 TEST STOCK IMPORTER")
+    print("=" * 60)
+    
+    importer = StockImporter()
+    
+    # Test với file mẫu
+    test_file = Path("D:/PYTHON/B7KHSX/EXCEL/FFSTOCK 31-12-2025.xlsm")
+    
+    if not test_file.exists():
+        print(f"❌ File test không tồn tại: {test_file}")
+        return
+    
+    print(f"\n📁 File: {test_file}")
+    print(f"📊 Database: {importer.db_path}")
+    
+    # Kiểm tra duplicate
+    if importer.check_duplicate(test_file.name):
+        print(f"\n⚠️ File đã được import trước đó!")
+        return
+    
+    print("\n🚀 Bắt đầu import...")
+    result = importer.import_ffstock(
+        file_path=test_file,
+        nguoi_import="test_user"
+    )
+    
+    print(f"\n📊 KẾT QUẢ:")
+    print(f"   ✅ Thành công: {result['success']}")
+    print(f"   ⚠️ Không tìm thấy: {len(result['not_found'])}")
+    print(f"   ❌ Lỗi: {len(result['errors'])}")
+    print(f"   📦 Mã Stock Old: {result['ma_stock_old']}")
+    
+    if result['not_found']:
+        print(f"\n   Code không tìm thấy (top 10):")
+        for code in result['not_found'][:10]:
+            print(f"      - {code}")
+
+
+if __name__ == "__main__":
+    test_stock_importer()
