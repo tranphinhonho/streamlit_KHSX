@@ -23,5 +23,10 @@ Pillow
 requests
 msal
 
+# Google Drive API
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
 # Note: pywin32 removed - not compatible with Linux (Streamlit Cloud)
 # Outlook email features will use file upload instead on cloud
