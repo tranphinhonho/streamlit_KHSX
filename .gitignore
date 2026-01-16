@@ -17,10 +17,11 @@ ENV/
 .env
 *.env
 
-# Database (local SQLite - will be different on cloud)
-*.db
+# Database (local SQLite - keep database_new.db for cloud)
+database.db
 *.sqlite
 *.sqlite3
+# Note: database_new.db is NOT ignored - needed for cloud deployment
 
 # Downloads and temp files
 downloads/
