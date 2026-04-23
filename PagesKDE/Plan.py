@@ -3,6 +3,13 @@ from admin.sys_kde_components import *
 import sqlite3
 from datetime import datetime, timedelta
 import pandas as pd
+from admin.sys_database import IS_POSTGRES
+
+def _date_params(date_obj):
+    """Return (ngay_str, ngay_str_alt) - on PostgreSQL both are YYYY-MM-DD."""
+    ngay_str = date_obj.strftime('%Y-%m-%d')
+    ngay_str_alt = ngay_str if IS_POSTGRES else date_obj.strftime('%d/%m/%Y')
+    return ngay_str, ngay_str_alt
 
 def process_import_plan(df):
     """Xử lý import Excel cho kế hoạch - tự động tìm ID sản phẩm từ tên"""
@@ -334,8 +341,7 @@ def app(selected):
         # Tính tổng sản lượng
         conn = ss.connect_db()
         cursor = conn.cursor()
-        ngay_str = ngay_tong.strftime('%Y-%m-%d')
-        ngay_str_alt = ngay_tong.strftime('%d/%m/%Y')
+        ngay_str, ngay_str_alt = _date_params(ngay_tong)
         
         cursor.execute("""
             SELECT 
@@ -380,8 +386,7 @@ def app(selected):
                 conn = ss.connect_db()
                 cursor = conn.cursor()
                 
-                ngay_str = ngay_chuyen.strftime('%Y-%m-%d')
-                ngay_str_alt = ngay_chuyen.strftime('%d/%m/%Y')
+                ngay_str, ngay_str_alt = _date_params(ngay_chuyen)
                 
                 # Query và gộp các code cám trùng
                 cursor.execute("""
@@ -460,8 +465,7 @@ def app(selected):
         # Lấy danh sách Mã plan theo ngày
         conn = ss.connect_db()
         cursor = conn.cursor()
-        ngay_str = ngay_xoa.strftime('%Y-%m-%d')
-        ngay_str_alt = ngay_xoa.strftime('%d/%m/%Y')
+        ngay_str, ngay_str_alt = _date_params(ngay_xoa)
         cursor.execute("""
             SELECT DISTINCT [Mã plan], COUNT(*) as cnt, SUM([Số lượng]) as tong
             FROM Plan 
@@ -544,8 +548,7 @@ def app(selected):
                 if st.button("✅ Xác nhận XÓA", type="primary", key="confirm_yes"):
                     conn = ss.connect_db()
                     cursor = conn.cursor()
-                    ngay_str = ngay.strftime('%Y-%m-%d')
-                    ngay_str_alt = ngay.strftime('%d/%m/%Y')
+                    ngay_str, ngay_str_alt = _date_params(ngay)
                     cursor.execute("UPDATE Plan SET [Đã xóa] = 1, [Người sửa] = ?, [Thời gian sửa] = ? WHERE ([Ngày plan] = ? OR [Ngày plan] = ?) AND [Đã xóa] = 0", (st.session_state.username, fn.get_vietnam_time(), ngay_str, ngay_str_alt))
                     conn.commit()
                     deleted = cursor.rowcount
@@ -564,8 +567,7 @@ def tinh_toan_ke_hoach(ngay_ke_hoach):
     try:
         conn = ss.connect_db()
         cursor = conn.cursor()
-        ngay_str = ngay_ke_hoach.strftime('%Y-%m-%d')
-        ngay_str_alt = ngay_ke_hoach.strftime('%d/%m/%Y')
+        ngay_str, ngay_str_alt = _date_params(ngay_ke_hoach)
         
         # Ngày lấy hàng = ngày kế hoạch + 1 (SX hôm nay → Giao ngày mai)
         ngay_lay = (ngay_ke_hoach + timedelta(days=1)).strftime('%Y-%m-%d')
