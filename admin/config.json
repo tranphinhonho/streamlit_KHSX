@@ -1,7 +1,0 @@
-{
-    "database_path": "../database_new.db",
-    "api_key_gemini": "AIzaSyA9ygUTNuIQxX3R1vX9KTMBbNW2vyh99eg",
-    "model-gemini": "gemini-2.5-pro",
-    "model-flash": "gemini-flash-lite-latest",
-    "model-flash1": "gemini-flash-latest"
-}

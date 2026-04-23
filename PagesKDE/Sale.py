@@ -1,5 +1,21 @@
 import streamlit as st
+import re
+from pathlib import Path
 from admin.sys_kde_components import *
+from utils.import_notification import send_import_notification
+
+def _extract_month_year_from_filename(filename: str):
+    """Trích xuất tháng và năm từ tên file DAILY SALED REPORT THANG X.YYYY"""
+    match = re.search(r'THANG\s*(\d{1,2})[.\s]*(\d{4})', filename, re.IGNORECASE)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None, None
+
+def _find_sale_report_files():
+    """Tìm tất cả file DAILY SALED REPORT trong folder EXCEL"""
+    excel_folder = Path("D:/PYTHON/B7KHSX/EXCEL")
+    files = list(excel_folder.glob("DAILY SALED REPORT*.xls*"))
+    return sorted(files, reverse=True)
 
 # Mapping vật nuôi
 VAT_NUOI_LABELS = {
@@ -41,7 +57,7 @@ def app(selected):
         **Import sản lượng bán hàng từ file Excel DAILY SALED REPORT**
         - Chọn file Excel chứa dữ liệu sale theo ngày
         - Chọn ngày (sheet) cần import
-        - Lưu ý: Kích cỡ bao = 10kg sẽ bị loại bỏ
+        - Preview và xác nhận trước khi import
         """)
         
         try:
@@ -49,30 +65,49 @@ def app(selected):
             
             importer = SaleImporter()
             
+            # Tìm file DAILY SALED REPORT trong folder EXCEL
+            available_files = _find_sale_report_files()
+            
             # File selector
             col1, col2 = st.columns([2, 1])
             
             with col1:
+                # Tìm file mặc định mới nhất
+                if available_files:
+                    default_file = available_files[0]  # File mới nhất
+                    default_name = default_file.name
+                else:
+                    default_file = None
+                    default_name = "Không tìm thấy file"
+                
                 use_default = st.checkbox(
-                    "Sử dụng file mặc định: EXCEL/DAILY SALED REPORT THANG 1.2026.xlsm",
+                    f"Sử dụng file mặc định: EXCEL/{default_name}",
                     value=True
                 )
                 
                 if use_default:
-                    file_path = "EXCEL/DAILY SALED REPORT THANG 1.2026.xlsm"
-                    st.info(f"📁 File: {file_path}")
+                    if default_file:
+                        file_path = str(default_file)
+                        file_name_for_date = default_name
+                        st.info(f"📁 File: EXCEL/{default_name}")
+                    else:
+                        file_path = None
+                        file_name_for_date = ""
+                        st.warning("📭 Không tìm thấy file DAILY SALED REPORT trong folder EXCEL")
                 else:
                     uploaded = st.file_uploader(
                         "Chọn file Excel DAILY SALED REPORT",
                         type=['xlsx', 'xlsm']
                     )
                     if uploaded:
+                        file_name_for_date = uploaded.name
                         import tempfile
                         with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsm') as f:
                             f.write(uploaded.read())
                             file_path = f.name
                     else:
                         file_path = None
+                        file_name_for_date = ""
             
             if file_path:
                 try:
@@ -88,19 +123,18 @@ def app(selected):
                     
                     if selected_sheet:
                         st.subheader(f"📋 Preview dữ liệu ngày {selected_sheet}")
-                        st.caption("⚠️ Đã lọc bỏ các dòng có kích cỡ bao = 10kg")
                         
                         with st.spinner("Đang đọc dữ liệu..."):
                             preview_df = importer.preview_data(
                                 file_path=file_path,
                                 sheet_name=selected_sheet,
-                                limit=15
+                                limit=None  # Hiển thị tất cả
                             )
                         
                         if len(preview_df) > 0:
                             st.dataframe(
                                 preview_df,
-                                use_container_width=True,
+                                width="stretch",
                                 column_config={
                                     'Tên cám': st.column_config.TextColumn('Tên cám', width='medium'),
                                     'Kích cỡ bao (kg)': st.column_config.TextColumn('Kích cỡ bao (kg)', width='small'),
@@ -109,19 +143,40 @@ def app(selected):
                                 }
                             )
                             
-                            st.caption(f"Hiển thị tối đa 15 dòng đầu tiên")
+                            # Tính tổng sản lượng từ preview
+                            total_kg = preview_df['Số lượng (kg)'].sum()
+                            
+                            # Lấy giá trị tổng từ Excel M4
+                            excel_total = importer.get_excel_total(
+                                file_path=file_path,
+                                sheet_name=selected_sheet
+                            )
+                            
+                            st.caption(f"Tổng cộng: {len(preview_df)} dòng dữ liệu")
+                            st.caption(f"📊 **Tổng sản lượng (tính từ preview):** {total_kg:,.0f} kg")
+                            if excel_total is not None:
+                                st.caption(f"📋 **Tổng sản lượng Excel (ô M4):** {excel_total:,.0f} kg")
+                                # Kiểm tra chênh lệch
+                                if abs(total_kg - excel_total) > 1:
+                                    st.warning(f"⚠️ Chênh lệch: {abs(total_kg - excel_total):,.0f} kg (có thể do mã cám không tìm thấy)")
                             
                             col_btn1, col_btn2 = st.columns([1, 3])
                             
                             with col_btn1:
                                 if st.button("🚀 Import vào Database", type="primary"):
                                     with st.spinner(f"Đang import dữ liệu ngày {selected_sheet}..."):
+                                        # Trích xuất tháng/năm từ tên file
+                                        sale_month, sale_year = _extract_month_year_from_filename(file_name_for_date)
+                                        if not sale_month or not sale_year:
+                                            st.error("❌ Không thể trích xuất tháng/năm từ tên file. Tên file phải chứa 'THANG X.YYYY'")
+                                            st.stop()
+                                        
                                         result = importer.import_sale_data(
                                             file_path=file_path,
                                             sheet_name=selected_sheet,
                                             nguoi_import=st.session_state.get('username', 'system'),
-                                            year=2026,
-                                            month=1
+                                            year=sale_year,
+                                            month=sale_month
                                         )
                                     
                                     if result['success'] > 0:
@@ -143,6 +198,17 @@ def app(selected):
                                                     st.text(f"- {code}")
                                                 if len(result['not_found']) > 20:
                                                     st.text(f"... và {len(result['not_found']) - 20} mã khác")
+                                            
+                                            # Gửi email thông báo
+                                            email_sent = send_import_notification(
+                                                not_found_codes=result['not_found'],
+                                                filename=file_path,
+                                                import_type='SALE',
+                                                ngay_import=result.get('ngay_sale', ''),
+                                                nguoi_import=st.session_state.get('username', 'system')
+                                            )
+                                            if email_sent:
+                                                st.info(f"📧 Đã gửi email thông báo về {len(result['not_found'])} mã SP chưa có dữ liệu tới phinho@cp.com.vn")
                                     else:
                                         st.error("❌ Không import được sản phẩm nào!")
                                         if result['errors']:
@@ -150,6 +216,16 @@ def app(selected):
                                                 st.error(err)
                                         if result['not_found']:
                                             st.warning(f"Không tìm thấy {len(result['not_found'])} mã cám trong database")
+                                            # Gửi email thông báo
+                                            email_sent = send_import_notification(
+                                                not_found_codes=result['not_found'],
+                                                filename=file_path,
+                                                import_type='SALE',
+                                                ngay_import='',
+                                                nguoi_import=st.session_state.get('username', 'system')
+                                            )
+                                            if email_sent:
+                                                st.info(f"📧 Đã gửi email thông báo về {len(result['not_found'])} mã SP chưa có dữ liệu tới phinho@cp.com.vn")
                         else:
                             st.info("📅 Ngày này không có dữ liệu bán hàng")
                             
@@ -226,16 +302,32 @@ def app(selected):
     filter_cols = st.columns(7)
     with filter_cols[0]:
         btn_style = "primary" if st.session_state.filter_vatnuoi_sale is None else "secondary"
-        if st.button("📦 Tất cả", use_container_width=True, type=btn_style, key="sale_filter_all"):
+        if st.button("📦 Tất cả", width="stretch", type=btn_style, key="sale_filter_all"):
             st.session_state.filter_vatnuoi_sale = None
             st.rerun()
     
     for idx, (code, label) in enumerate(VAT_NUOI_LABELS.items()):
         with filter_cols[idx + 1]:
             btn_style = "primary" if st.session_state.filter_vatnuoi_sale == code else "secondary"
-            if st.button(label, use_container_width=True, type=btn_style, key=f"sale_filter_{code}"):
+            if st.button(label, width="stretch", type=btn_style, key=f"sale_filter_{code}"):
                 st.session_state.filter_vatnuoi_sale = code
                 st.rerun()
+    
+    # Filter theo ngày
+    col_date, col_search = st.columns([1, 3])
+    with col_date:
+        selected_date = st.date_input(
+            "Lọc theo ngày",
+            value=None,
+            format="YYYY/MM/DD",
+            key="sale_date_filter"
+        )
+        if selected_date:
+            st.session_state.filter_date = selected_date.strftime('%Y-%m-%d')
+            # Khi lọc theo ngày, mặc định hiển thị tất cả
+            st.session_state.page_size = 'All'
+        elif 'filter_date' in st.session_state and st.session_state.get('filter_date'):
+            pass
     
     # Xây dựng điều kiện lọc
     col_where = {'Đã xóa': ('=', 0)}

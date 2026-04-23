@@ -130,67 +130,93 @@ class TonBonImporter:
     
     def read_direct_from_cells(
         self, 
-        file_path: str | Path = None
+        file_path: str | Path = None,
+        sheet_index: int = 1
     ) -> pd.DataFrame:
         """
-        Đọc trực tiếp dữ liệu từ các vùng cell cố định ở Sheet 2
-        NHANH hơn chạy VBA!
+        Đọc trực tiếp dữ liệu từ các vùng cell ở Sheet cụ thể
         
-        Vùng cell (Sheet 2):
-        - A10:C16 (số bồn, code, kg) - Bồn cám bán thành phẩm
-        - A21:C38 (số bồn, code, kg) - Bồn cám thành phẩm
-        - E10:G15 (số bồn, code, kg) - Bồn cám bán thành phẩm
-        - E21:G38 (số bồn, code, kg) - Bồn cám thành phẩm
+        Cấu trúc file:
+        - Cột A (A1:A50) và cột E (E1:E50): Số bồn
+          + Bồn 86-98: Bán thành phẩm
+          + Bồn 99-134: Thành phẩm
+        - Cột B và F: Mã số cám (code)
+        - Cột C và G: Khối lượng (kg)
         
+        Args:
+            file_path: Đường dẫn file Excel
+            sheet_index: Index của sheet (0-based), hoặc tên sheet
+            
         Returns:
-            DataFrame với các cột: Code cám, Số lượng (kg), Số bồn
+            DataFrame với các cột: Code cám, Số lượng (kg), Số bồn, Loại bồn
         """
         file_path = Path(file_path or self.DEFAULT_FILE)
         
+        # Danh sách số bồn hợp lệ
+        BON_BAN_THANH_PHAM = set(range(86, 99))  # 86-98
+        BON_THANH_PHAM = set(range(99, 135))     # 99-134
+        ALL_VALID_BONS = BON_BAN_THANH_PHAM | BON_THANH_PHAM
+        
         try:
-            # Đọc Sheet 2 (index 1)
-            df = pd.read_excel(file_path, sheet_name=1, header=None, engine='openpyxl')
+            # Đọc sheet theo index hoặc tên
+            df = pd.read_excel(file_path, sheet_name=sheet_index, header=None, engine='openpyxl')
             
             data = []
             
-            # Các vùng cell cần đọc (row index 0-based)
+            # Quét 2 vùng: A1:C50 và E1:G50 (row index 0-49)
             # A=0, B=1, C=2, E=4, F=5, G=6
-            ranges = [
-                # (bon_col, code_col, kg_col, start_row, end_row)
-                (0, 1, 2, 9, 16),    # A10:C16 (Bồn cám bán thành phẩm - trái)
-                (0, 1, 2, 20, 38),   # A21:C38 (Bồn cám thành phẩm - trái)
-                (4, 5, 6, 9, 15),    # E10:G15 (Bồn cám bán thành phẩm - phải)
-                (4, 5, 6, 20, 38),   # E21:G38 (Bồn cám thành phẩm - phải)
+            column_sets = [
+                (0, 1, 2),   # Cột A, B, C (trái)
+                (4, 5, 6),   # Cột E, F, G (phải)
             ]
             
-            for bon_col, code_col, kg_col, start_row, end_row in ranges:
-                for row_idx in range(start_row, min(end_row, len(df))):
+            for bon_col, code_col, kg_col in column_sets:
+                # Quét từ row 0-49 (A1:A50)
+                for row_idx in range(min(50, len(df))):
                     try:
                         bon_val = df.iloc[row_idx, bon_col]
-                        code_val = df.iloc[row_idx, code_col]
-                        kg_val = df.iloc[row_idx, kg_col]
+                        code_val = df.iloc[row_idx, code_col] if code_col < len(df.columns) else None
+                        kg_val = df.iloc[row_idx, kg_col] if kg_col < len(df.columns) else None
                         
+                        # Kiểm tra số bồn hợp lệ
+                        if pd.isna(bon_val):
+                            continue
+                        
+                        try:
+                            so_bon = int(float(bon_val))
+                        except (ValueError, TypeError):
+                            continue
+                        
+                        # Chỉ xử lý nếu là số bồn hợp lệ (86-134)
+                        if so_bon not in ALL_VALID_BONS:
+                            continue
+                        
+                        # Xác định loại bồn
+                        loai_bon = "Bán thành phẩm" if so_bon in BON_BAN_THANH_PHAM else "Thành phẩm"
+                        
+                        # Kiểm tra code cám
                         if pd.isna(code_val) or str(code_val).strip() == '':
                             continue
                         
-                        # Chuyển code về string 6 chữ số
-                        code_str = str(int(float(code_val))).strip()
-                        if len(code_str) == 6 and code_str.isdigit():
+                        # Chuyển code về string (hỗ trợ 6 hoặc 8 chữ số)
+                        # Loại bỏ ký tự * và các ký tự không phải số
+                        code_raw = str(code_val).strip().replace('*', '').replace(' ', '')
+                        try:
+                            code_str = str(int(float(code_raw))).strip()
+                        except (ValueError, TypeError):
+                            continue
+                        
+                        if len(code_str) in [6, 8] and code_str.isdigit():
                             kg = float(kg_val) if not pd.isna(kg_val) else 0
-                            
-                            # Lấy số bồn (có thể là số hoặc text)
-                            if pd.isna(bon_val):
-                                so_bon = ''
-                            else:
-                                so_bon = str(int(float(bon_val))) if isinstance(bon_val, (int, float)) else str(bon_val).strip()
                             
                             if kg > 0:  # Chỉ lấy khi có số lượng
                                 data.append({
                                     'Code cám': code_str,
                                     'Số lượng (kg)': kg,
-                                    'Số bồn': so_bon
+                                    'Số bồn': str(so_bon),
+                                    'Loại bồn': loai_bon
                                 })
-                    except:
+                    except Exception:
                         continue
             
             # Gộp các mã giống nhau (cộng kg, nối số bồn)
@@ -199,16 +225,101 @@ class TonBonImporter:
                 # Group và aggregate
                 df_grouped = df_result.groupby('Code cám', as_index=False).agg({
                     'Số lượng (kg)': 'sum',
-                    'Số bồn': lambda x: ', '.join(sorted(set(str(v) for v in x if v)))  # Nối các bồn
+                    'Số bồn': lambda x: ', '.join(sorted(set(str(v) for v in x if v))),  # Nối các bồn
+                    'Loại bồn': 'first'  # Lấy loại bồn đầu tiên
                 })
-                print(f"📊 Đọc được {len(data)} dòng → {len(df_grouped)} mã (sau gộp)")
                 return df_grouped
             
             return pd.DataFrame()
             
         except Exception as e:
-            print(f"Lỗi đọc trực tiếp: {e}")
+            print(f"Lỗi đọc sheet {sheet_index}: {e}")
             return pd.DataFrame()
+    
+    def _extract_month_year_from_filename(self, filename: str) -> tuple:
+        """
+        Trích xuất tháng và năm từ tên file
+        Ví dụ: "Bao cao ton bon thanh pham 01.2026.xlsx" → (1, 2026)
+        """
+        import re
+        # Tìm pattern XX.YYYY hoặc XX-YYYY
+        match = re.search(r'(\d{1,2})[.\-](\d{4})', filename)
+        if match:
+            month = int(match.group(1))
+            year = int(match.group(2))
+            return (month, year)
+        return (None, None)
+    
+    def read_all_sheets_with_dates(
+        self, 
+        file_path: str | Path = None
+    ) -> pd.DataFrame:
+        """
+        Đọc dữ liệu từ TẤT CẢ các sheet (1-31), mỗi sheet tương ứng 1 ngày.
+        Tự động xác định ngày từ tên sheet + tháng/năm từ tên file.
+        
+        Args:
+            file_path: Đường dẫn file Excel
+            
+        Returns:
+            DataFrame với các cột: Ngày, Code cám, Số lượng (kg), Số bồn
+        """
+        file_path = Path(file_path or self.DEFAULT_FILE)
+        filename = file_path.name
+        
+        # Lấy tháng/năm từ tên file
+        month, year = self._extract_month_year_from_filename(filename)
+        if not month or not year:
+            print(f"⚠️ Không thể xác định tháng/năm từ tên file: {filename}")
+            # Fallback: dùng tháng/năm hiện tại
+            from datetime import datetime
+            now = datetime.now()
+            month, year = now.month, now.year
+        
+        print(f"📅 File tháng {month:02d}/{year}")
+        
+        # Lấy danh sách sheet
+        try:
+            xl = pd.ExcelFile(file_path, engine='openpyxl')
+            sheet_names = xl.sheet_names
+        except Exception as e:
+            print(f"❌ Lỗi mở file: {e}")
+            return pd.DataFrame()
+        
+        all_data = []
+        valid_days = 0
+        
+        # Duyệt qua các sheet có tên là số (1-31)
+        for sheet_name in sheet_names:
+            try:
+                day = int(sheet_name.strip())
+                if day < 1 or day > 31:
+                    continue
+            except ValueError:
+                continue  # Sheet không phải số, bỏ qua
+            
+            # Kiểm tra ngày hợp lệ
+            from datetime import date
+            try:
+                ngay = date(year, month, day)
+            except ValueError:
+                continue  # Ngày không hợp lệ (ví dụ 31/02)
+            
+            # Đọc dữ liệu từ sheet này
+            df_sheet = self.read_direct_from_cells(file_path, sheet_index=sheet_name)
+            
+            if len(df_sheet) > 0:
+                df_sheet['Ngày'] = ngay.strftime('%Y-%m-%d')
+                all_data.append(df_sheet)
+                valid_days += 1
+                print(f"  ✓ Ngày {day:02d}: {len(df_sheet)} mã sản phẩm")
+        
+        if all_data:
+            df_combined = pd.concat(all_data, ignore_index=True)
+            print(f"📊 Tổng cộng: {len(df_combined)} dòng từ {valid_days} ngày")
+            return df_combined
+        
+        return pd.DataFrame()
     
     def run_vba_and_read(
         self, 
@@ -490,6 +601,7 @@ class TonBonImporter:
                 code_cam = row['Code cám']
                 so_luong = row['Số lượng (kg)']
                 so_bon = row.get('Số bồn', 'Import')  # Lấy số bồn từ data
+                ngay_row = row.get('Ngày', ngay_kiem)  # Lấy ngày từ data nếu có
                 
                 # Tìm ID sản phẩm
                 id_sanpham = self._get_product_id(cursor, code_cam)
@@ -515,7 +627,7 @@ class TonBonImporter:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """, (
                     ma_tonbon,
-                    ngay_kiem,
+                    ngay_row,  # Sử dụng ngày từ row nếu có
                     id_sanpham,
                     loai_san_pham,
                     so_luong,
@@ -556,6 +668,228 @@ class TonBonImporter:
             'errors': errors,
             'total': len(df),
             'ngay_kiem': ngay_kiem
+        }
+    
+    def import_all_days(
+        self,
+        file_path: str | Path = None,
+        nguoi_import: str = "system",
+        loai_san_pham: str = "Thành phẩm",
+        overwrite: bool = False
+    ) -> Dict:
+        """
+        Import dữ liệu Tồn bồn từ TẤT CẢ các sheet (1-31 ngày) vào database.
+        Tự động xác định ngày từ tên sheet + tháng/năm từ tên file.
+        
+        Args:
+            file_path: Đường dẫn file Excel
+            nguoi_import: Username người import
+            loai_san_pham: Loại sản phẩm (Thành phẩm / Bán thành phẩm)
+            overwrite: Nếu True, xóa dữ liệu cũ trước khi import
+            
+        Returns:
+            Dict kết quả: {success, not_found, errors, total, days_imported}
+        """
+        file_path = Path(file_path or self.DEFAULT_FILE)
+        filename = file_path.name
+        
+        # Đọc tất cả sheets với ngày
+        df = self.read_all_sheets_with_dates(file_path)
+        
+        if len(df) == 0:
+            return {
+                'success': 0,
+                'not_found': [],
+                'errors': ["Không tìm thấy dữ liệu trong file"],
+                'total': 0,
+                'days_imported': 0
+            }
+        
+        # Đếm số ngày
+        unique_days = df['Ngày'].nunique()
+        print(f"📊 Đọc được {len(df)} dòng từ {unique_days} ngày")
+        
+        # Xóa dữ liệu cũ nếu overwrite
+        if overwrite:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Lấy danh sách các ngày sẽ import
+            days_to_delete = df['Ngày'].unique().tolist()
+            deleted_total = 0
+            
+            for ngay in days_to_delete:
+                deleted = self._delete_old_import(cursor, ngay)
+                deleted_total += deleted
+            
+            conn.commit()
+            conn.close()
+            
+            if deleted_total > 0:
+                print(f"🗑️ Đã xóa mềm {deleted_total} record cũ")
+        
+        # Import dữ liệu (có cột Ngày trong df)
+        result = self.import_tonbon(
+            file_path=file_path,
+            ngay_kiem=None,  # Không dùng, lấy từ df
+            nguoi_import=nguoi_import,
+            loai_san_pham=loai_san_pham,
+            overwrite=False,  # Đã xóa ở trên
+            _df_override=df  # Pass df đã có Ngày
+        )
+        
+        result['days_imported'] = unique_days
+        return result
+    
+    def import_tonbon(
+        self,
+        file_path: str | Path = None,
+        sheet_name: str = None,
+        ngay_kiem: str = None,
+        nguoi_import: str = "system",
+        loai_san_pham: str = "Thành phẩm",
+        overwrite: bool = False,
+        _df_override: pd.DataFrame = None  # Internal: dữ liệu đã đọc sẵn
+    ) -> Dict:
+        """
+        Import dữ liệu Tồn bồn từ Excel vào database
+        
+        Args:
+            file_path: Đường dẫn file Excel
+            sheet_name: Tên sheet (không dùng - đọc từ các sheet số)
+            ngay_kiem: Ngày kiểm kho (YYYY-MM-DD), nếu None sẽ lấy từ dữ liệu
+            nguoi_import: Username người import
+            loai_san_pham: Loại sản phẩm (Thành phẩm / Bán thành phẩm)
+            overwrite: Nếu True, xóa dữ liệu cũ trước khi import
+            _df_override: DataFrame đã đọc sẵn (internal use)
+            
+        Returns:
+            Dict kết quả: {success, not_found, errors, total}
+        """
+        file_path = Path(file_path or self.DEFAULT_FILE)
+        filename = file_path.name
+        
+        # Sử dụng df đã có hoặc đọc mới
+        if _df_override is not None:
+            df = _df_override
+        else:
+            # Nếu không có ngày_kiem và không có df_override → đọc all sheets
+            if not ngay_kiem:
+                df = self.read_all_sheets_with_dates(file_path)
+            else:
+                # Đọc từ 1 sheet cụ thể (legacy mode)
+                df = self.read_direct_from_cells(file_path)
+                if len(df) > 0:
+                    df['Ngày'] = ngay_kiem
+        
+        if len(df) == 0:
+            return {
+                'success': 0,
+                'not_found': [],
+                'errors': ["Không tìm thấy dữ liệu trong file"],
+                'total': 0
+            }
+        
+        print(f"📊 Đọc được {len(df)} mã sản phẩm từ file")
+        
+        # Ngày mặc định nếu không có trong df
+        if 'Ngày' not in df.columns:
+            if not ngay_kiem:
+                ngay_kiem = datetime.now().strftime('%Y-%m-%d')
+            df['Ngày'] = ngay_kiem
+        
+        # Kết nối database
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Xóa dữ liệu cũ nếu overwrite
+        if overwrite:
+            unique_days = df['Ngày'].unique()
+            for day in unique_days:
+                deleted = self._delete_old_import(cursor, day)
+                if deleted > 0:
+                    print(f"🗑️ Đã xóa mềm {deleted} record cũ (ngày {day})")
+        
+        thoi_gian_tao = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        success_count = 0
+        not_found = []
+        errors = []
+        
+        # Lặp qua DataFrame
+        for _, row in df.iterrows():
+            try:
+                code_cam = row['Code cám']
+                so_luong = row['Số lượng (kg)']
+                so_bon = row.get('Số bồn', 'Import')
+                ngay_row = row.get('Ngày', ngay_kiem or datetime.now().strftime('%Y-%m-%d'))
+                
+                # Tìm ID sản phẩm
+                id_sanpham = self._get_product_id(cursor, code_cam)
+                
+                if not id_sanpham:
+                    if code_cam not in not_found:
+                        not_found.append(code_cam)
+                    continue
+                
+                # Bỏ qua nếu số lượng = 0
+                if so_luong <= 0:
+                    continue
+                
+                # Tạo mã tự động
+                ma_tonbon = self._generate_tonbon_code(cursor)
+                
+                # Insert vào TonBon
+                cursor.execute("""
+                    INSERT INTO TonBon 
+                    ([Mã tồn bồn], [Ngày kiểm kho], [ID sản phẩm], 
+                     [Loại sản phẩm], [Số lượng (kg)], [Số bồn],
+                     [Trạng thái], [Kích cỡ đóng bao], [Ca sản xuất],
+                     [Ghi chú], [Người tạo], [Thời gian tạo], [Đã xóa])
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                """, (
+                    ma_tonbon,
+                    ngay_row,
+                    id_sanpham,
+                    loai_san_pham,
+                    so_luong,
+                    so_bon if so_bon else 'N/A',
+                    'Chờ xử lý',
+                    'N/A',
+                    'Import',
+                    f"Import từ {filename}",
+                    nguoi_import,
+                    thoi_gian_tao
+                ))
+                
+                success_count += 1
+                
+            except Exception as e:
+                errors.append(f"{code_cam}: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        # Ghi log
+        if success_count > 0:
+            unique_days = df['Ngày'].nunique() if 'Ngày' in df.columns else 1
+            self._log_import(
+                filename=f"TONBON_{unique_days}days_{filename}",
+                loai_file='TONBON',
+                so_luong=success_count,
+                ngay_email=df['Ngày'].max() if 'Ngày' in df.columns else ngay_kiem,
+                nguoi_import=nguoi_import
+            )
+        
+        print(f"✅ Import thành công: {success_count}/{len(df)} sản phẩm")
+        if not_found:
+            print(f"⚠️ Không tìm thấy {len(not_found)} mã: {', '.join(not_found[:5])}...")
+        
+        return {
+            'success': success_count,
+            'not_found': list(set(not_found)),  # Unique
+            'errors': errors,
+            'total': len(df)
         }
 
 

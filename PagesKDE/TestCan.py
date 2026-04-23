@@ -12,14 +12,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, ImageGrab
 from streamlit_paste_button import paste_image_button
-
-# win32com chỉ hoạt động trên Windows
-try:
-    import win32com.client
-    HAS_WIN32 = True
-except ImportError:
-    win32com = None
-    HAS_WIN32 = False
+import win32com.client
 
 from utils.email_utils import send_outlook_email
 from utils.ocr_utils import (
@@ -191,9 +184,9 @@ def _render_email_form(row: Dict[str, str], image: Image.Image, current_user: st
         
         col1, col2 = st.columns(2)
         with col1:
-            send_mail = st.form_submit_button("📧 Gửi email tự động", use_container_width=True)
+            send_mail = st.form_submit_button("📧 Gửi email tự động", width="stretch")
         with col2:
-            display_mail = st.form_submit_button("👁️ Mở trong Outlook", use_container_width=True, help="Hiển thị email trong Outlook để bạn tự gửi")
+            display_mail = st.form_submit_button("👁️ Mở trong Outlook", width="stretch", help="Hiển thị email trong Outlook để bạn tự gửi")
 
     if send_mail or display_mail:
         recipients = [addr.strip() for addr in re.split(r"[;,]", to_raw) if addr.strip()]
@@ -206,9 +199,6 @@ def _render_email_form(row: Dict[str, str], image: Image.Image, current_user: st
         
         # Nếu chọn Display, chỉ hiển thị email
         if display_mail:
-            if not HAS_WIN32:
-                st.error("❌ Tính năng này chỉ hoạt động trên Windows với Outlook.")
-                return
             try:
                 attachment_path = _save_temp_attachment(image)
                 
@@ -401,7 +391,7 @@ def _render_history_view():
             to_date = None
             st.empty()
     
-    if st.button("📥 Xuất Excel", use_container_width=True):
+    if st.button("📥 Xuất Excel", width="stretch"):
         try:
             from datetime import datetime, timedelta
             import io
@@ -485,7 +475,7 @@ def _render_history_view():
                     data=output.getvalue(),
                     file_name=filename,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
+                    width="stretch"
                 )
                 
         except Exception as e:

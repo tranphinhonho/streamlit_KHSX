@@ -17,11 +17,11 @@ ENV/
 .env
 *.env
 
-# Database (local SQLite - keep database_new.db for cloud)
+# Database (local SQLite)
 database.db
+database_new.db
 *.sqlite
 *.sqlite3
-# Note: database_new.db is NOT ignored - needed for cloud deployment
 
 # Downloads and temp files
 downloads/
@@ -35,6 +35,9 @@ EXCEL/
 # Secrets (never commit!)
 .streamlit/secrets.toml
 
+# Config with API keys
+admin/config.json
+
 # OS
 .DS_Store
 Thumbs.db
@@ -44,3 +47,10 @@ Thumbs.db
 
 # Backup files
 *_backup*
+
+# Frontend node_modules
+frontend/node_modules/
+
+# Backend build
+backend/B7KHSX.Api/bin/
+backend/B7KHSX.Api/obj/

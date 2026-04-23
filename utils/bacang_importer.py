@@ -1,6 +1,17 @@
 """
 Module import dữ liệu Đại lý Bá Cang hàng tuần từ file Excel KẾ HOẠCH CÁM TUẦN VÕ BÁ CANG
-Parse dữ liệu từ 2 bảng trong mỗi sheet
+Parse dữ liệu trực tiếp từ source columns (không cần chạy VBA)
+
+Bảng 1 (Xe tải bao 25kg):
+- Dữ liệu nguồn: Cột A (mã cám), Cột B-G (số lượng theo ngày)
+- Ngày: Hàng 7, cột B-G
+- Sản phẩm: Từ hàng 8 đến hàng TOTAL
+
+Bảng 2 (Xe bồn Silo):
+- Tìm "MÃ CÁM" ở cột C làm mốc
+- Cột B: Ngày (có thể merged)
+- Cột C: Mã cám
+- Cột D: Số lượng (kg)
 """
 
 from __future__ import annotations
@@ -18,19 +29,17 @@ class BaCangImporter:
     # Default file path
     DEFAULT_FILE = "EXCEL/KẾ HOẠCH CÁM TUẦN VÕ BÁ CANG 2026.xlsm"
     
-    # Column mapping cho Bảng 1 (0-indexed)
-    TABLE1_COL_NGAY_LAY = 10    # Cột K - Ngày lấy cám
-    TABLE1_COL_TEN_CAM = 11     # Cột L - Tên cám
-    TABLE1_COL_SO_BAO = 12      # Cột M - Số bao cám
-    TABLE1_COL_SO_LUONG = 13    # Cột N - Số lượng cám (kg)
+    # Bảng 1: Dữ liệu nguồn (0-indexed)
+    TABLE1_PRODUCT_COL = 0        # Cột A - Mã sản phẩm
+    TABLE1_DATE_COLS = [1, 2, 3, 4, 5, 6]  # Cột B-G - Số lượng theo ngày
+    TABLE1_DATE_ROW = 6           # Hàng 7 - Chứa ngày
+    TABLE1_START_ROW = 7          # Hàng 8 - Bắt đầu dữ liệu sản phẩm
     
-    # Column mapping cho Bảng 2 (0-indexed)
-    TABLE2_COL_NGAY_LAY = 17    # Cột R - Ngày lấy cám
-    TABLE2_COL_TEN_CAM = 18     # Cột S - Tên cám
-    TABLE2_COL_SO_LUONG = 19    # Cột T - Số lượng cám (kg)
-    
-    # Start row (0-indexed, data starts from row 3 in Excel = row 2 in pandas)
-    START_ROW = 2
+    # Bảng 2: Dữ liệu nguồn  
+    TABLE2_DATE_COL = 1           # Cột B - Ngày
+    TABLE2_PRODUCT_COL = 2        # Cột C - Mã cám
+    TABLE2_QTY_COL = 3            # Cột D - Số lượng
+    TABLE2_HEADER = "MÃ CÁM"      # Từ khóa để tìm header bảng 2
     
     def __init__(self, db_path: str = "database_new.db"):
         """
@@ -48,21 +57,88 @@ class BaCangImporter:
     def get_available_sheets(self, file_path: str | Path = None) -> List[str]:
         """
         Lấy danh sách các sheet (tuần) có sẵn trong file Excel
+        Sắp xếp theo số tuần (xử lý chuyển năm: tuần 52 → tuần 1)
         """
         if file_path is None:
             file_path = self.DEFAULT_FILE
             
         xl = pd.ExcelFile(file_path)
-        return xl.sheet_names
+        sheet_names = xl.sheet_names
+        
+        # Sắp xếp theo số tuần (extract số từ tên sheet)
+        def get_week_number(sheet_name: str) -> int:
+            # Tìm số tuần trong tên sheet (e.g., "TUẦN 5" -> 5, "TUẦN 52@" -> 52)
+            match = re.search(r'(\d+)', sheet_name)
+            if match:
+                return int(match.group(1))
+            return 0
+        
+        # Xác định tuần hiện tại để xử lý chuyển năm
+        current_week = datetime.now().isocalendar()[1]
+        
+        # Sắp xếp: nếu đang ở tuần 1-10, coi các tuần 50-52 là "năm trước" (đặt lên đầu)
+        def sort_key(sheet_name: str) -> int:
+            week_num = get_week_number(sheet_name)
+            # Nếu đang ở đầu năm (tuần 1-10) và gặp tuần cuối năm (50-52)
+            # thì đặt tuần cuối năm lên đầu danh sách
+            if current_week <= 10 and week_num >= 50:
+                return week_num - 100  # Sẽ có giá trị âm, đứng đầu
+            return week_num
+        
+        sorted_sheets = sorted(sheet_names, key=sort_key)
+        return sorted_sheets
+    
+    def _find_total_row(self, df: pd.DataFrame) -> int:
+        """Tìm hàng chứa TOTAL ở cột A"""
+        for idx in range(len(df)):
+            val = df.iloc[idx, 0]
+            if pd.notna(val) and str(val).strip().upper() == "TOTAL":
+                return idx
+        return len(df)  # Nếu không tìm thấy, trả về cuối file
+    
+    def _find_table2_header(self, df: pd.DataFrame) -> int:
+        """Tìm hàng chứa MÃ CÁM ở cột C để làm mốc bảng 2"""
+        for idx in range(len(df)):
+            if self.TABLE2_PRODUCT_COL < len(df.columns):
+                val = df.iloc[idx, self.TABLE2_PRODUCT_COL]
+                if pd.notna(val) and self.TABLE2_HEADER in str(val).upper():
+                    return idx
+        return -1  # Không tìm thấy
+    
+    def _format_date(self, date_val) -> str:
+        """Format ngày thành chuỗi dd/mm/yyyy"""
+        if pd.isna(date_val):
+            return ""
+        if isinstance(date_val, datetime):
+            return date_val.strftime('%d/%m/%Y')
+        try:
+            # Thử parse nếu là chuỗi
+            parsed = pd.to_datetime(date_val)
+            return parsed.strftime('%d/%m/%Y')
+        except:
+            return str(date_val)
+    
+    def _format_date_db(self, date_val) -> Optional[str]:
+        """Format ngày thành chuỗi YYYY-MM-DD cho database"""
+        if pd.isna(date_val):
+            return None
+        if isinstance(date_val, datetime):
+            return date_val.strftime('%Y-%m-%d')
+        try:
+            parsed = pd.to_datetime(date_val)
+            return parsed.strftime('%Y-%m-%d')
+        except:
+            return None
     
     def preview_data(
         self, 
         file_path: str | Path = None, 
         sheet_name: str = None,
-        limit: int = 15
+        limit: int = 50
     ) -> tuple:
         """
         Xem trước dữ liệu từ một sheet
+        Đọc trực tiếp từ source columns (không cần VBA)
         Returns: (DataFrame bảng 1, DataFrame bảng 2)
         """
         if file_path is None:
@@ -77,83 +153,107 @@ class BaCangImporter:
         
         try:
             df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-        except Exception:
+        except Exception as e:
+            print(f"Error reading Excel: {e}")
             return pd.DataFrame(), pd.DataFrame()
         
-        # Đọc bảng 1
+        # === BẢNG 1: Xe tải bao 25kg ===
         data1 = []
-        for idx in range(self.START_ROW, min(len(df), self.START_ROW + limit * 2)):
-            row = df.iloc[idx]
+        total_row = self._find_total_row(df)
+        
+        # Lấy ngày từ hàng 7 (index 6)
+        dates = []
+        for col in self.TABLE1_DATE_COLS:
+            if col < len(df.columns):
+                dates.append(df.iloc[self.TABLE1_DATE_ROW, col])
+            else:
+                dates.append(None)
+        
+        # Duyệt qua các hàng sản phẩm
+        for row_idx in range(self.TABLE1_START_ROW, total_row):
+            product_code = df.iloc[row_idx, self.TABLE1_PRODUCT_COL]
             
-            ngay_lay = row[self.TABLE1_COL_NGAY_LAY] if self.TABLE1_COL_NGAY_LAY < len(row) else None
-            ten_cam = row[self.TABLE1_COL_TEN_CAM] if self.TABLE1_COL_TEN_CAM < len(row) else None
-            so_bao = row[self.TABLE1_COL_SO_BAO] if self.TABLE1_COL_SO_BAO < len(row) else None
-            so_luong = row[self.TABLE1_COL_SO_LUONG] if self.TABLE1_COL_SO_LUONG < len(row) else None
-            
-            if pd.isna(ten_cam) or pd.isna(so_luong):
+            if pd.isna(product_code) or str(product_code).strip() == "":
                 continue
             
-            try:
-                so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
-                so_bao_val = int(so_bao) if pd.notna(so_bao) else 0
-            except (ValueError, TypeError):
-                continue
+            product_code_clean = str(product_code).strip()
             
-            if so_luong_val <= 0:
-                continue
-            
-            ngay_lay_str = ""
-            if pd.notna(ngay_lay):
-                if isinstance(ngay_lay, datetime):
-                    ngay_lay_str = ngay_lay.strftime('%d/%m/%Y')
-                else:
-                    ngay_lay_str = str(ngay_lay)
+            # Duyệt qua từng cột ngày
+            for col_offset, col in enumerate(self.TABLE1_DATE_COLS):
+                if col >= len(df.columns):
+                    continue
+                    
+                qty = df.iloc[row_idx, col]
                 
-            data1.append({
-                'Ngày lấy': ngay_lay_str,
-                'Tên cám': str(ten_cam).strip(),
-                'Số bao': so_bao_val,
-                'Số lượng (kg)': so_luong_val
-            })
+                if pd.isna(qty):
+                    continue
+                    
+                try:
+                    qty_val = float(qty)
+                except (ValueError, TypeError):
+                    continue
+                
+                if qty_val <= 0:
+                    continue
+                
+                date_val = dates[col_offset]
+                
+                data1.append({
+                    'Ngày lấy': self._format_date(date_val),
+                    'Tên cám': product_code_clean,
+                    'Số bao': int(qty_val),
+                    'Số lượng (kg)': int(qty_val * 25)  # Mỗi bao 25kg
+                })
+                
+                if len(data1) >= limit:
+                    break
             
             if len(data1) >= limit:
                 break
         
-        # Đọc bảng 2
+        # === BẢNG 2: Xe bồn Silo ===
         data2 = []
-        for idx in range(self.START_ROW, min(len(df), self.START_ROW + limit * 2)):
-            row = df.iloc[idx]
+        table2_header_row = self._find_table2_header(df)
+        
+        if table2_header_row >= 0:
+            table2_start = table2_header_row + 1
+            last_date = None  # Để xử lý merged cells
             
-            ngay_lay = row[self.TABLE2_COL_NGAY_LAY] if self.TABLE2_COL_NGAY_LAY < len(row) else None
-            ten_cam = row[self.TABLE2_COL_TEN_CAM] if self.TABLE2_COL_TEN_CAM < len(row) else None
-            so_luong = row[self.TABLE2_COL_SO_LUONG] if self.TABLE2_COL_SO_LUONG < len(row) else None
-            
-            if pd.isna(ten_cam) or pd.isna(so_luong):
-                continue
-            
-            try:
-                so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
-            except (ValueError, TypeError):
-                continue
-            
-            if so_luong_val <= 0:
-                continue
-            
-            ngay_lay_str = ""
-            if pd.notna(ngay_lay):
-                if isinstance(ngay_lay, datetime):
-                    ngay_lay_str = ngay_lay.strftime('%d/%m/%Y')
-                else:
-                    ngay_lay_str = str(ngay_lay)
+            for row_idx in range(table2_start, len(df)):
+                product_code = df.iloc[row_idx, self.TABLE2_PRODUCT_COL]
                 
-            data2.append({
-                'Ngày lấy': ngay_lay_str,
-                'Tên cám': str(ten_cam).strip(),
-                'Số lượng (kg)': so_luong_val
-            })
-            
-            if len(data2) >= limit:
-                break
+                if pd.isna(product_code) or str(product_code).strip() == "":
+                    continue
+                    
+                product_code_clean = str(product_code).strip()
+                
+                # Bỏ qua các dòng tổng cộng
+                if "TỔNG" in product_code_clean.upper() or "TOTAL" in product_code_clean.upper():
+                    continue
+                
+                qty = df.iloc[row_idx, self.TABLE2_QTY_COL]
+                
+                try:
+                    qty_val = float(qty) if pd.notna(qty) else 0
+                except (ValueError, TypeError):
+                    continue
+                    
+                if qty_val <= 0:
+                    continue
+                
+                # Xử lý ngày (có thể merged)
+                date_val = df.iloc[row_idx, self.TABLE2_DATE_COL]
+                if pd.notna(date_val):
+                    last_date = date_val
+                
+                data2.append({
+                    'Ngày lấy': self._format_date(last_date),
+                    'Tên cám': product_code_clean,
+                    'Số lượng (kg)': int(qty_val)
+                })
+                
+                if len(data2) >= limit:
+                    break
         
         return pd.DataFrame(data1), pd.DataFrame(data2)
     
@@ -164,7 +264,7 @@ class BaCangImporter:
     ) -> List[Dict]:
         """
         Đọc toàn bộ dữ liệu từ cả 2 bảng trong sheet
-        Mỗi dòng là 1 bản ghi riêng biệt
+        Đọc trực tiếp từ source columns
         """
         try:
             df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
@@ -173,91 +273,115 @@ class BaCangImporter:
         
         data = []
         
-        # Đọc bảng 1
-        for idx in range(self.START_ROW, len(df)):
-            row = df.iloc[idx]
-            
-            ngay_lay = row[self.TABLE1_COL_NGAY_LAY] if self.TABLE1_COL_NGAY_LAY < len(row) else None
-            ten_cam = row[self.TABLE1_COL_TEN_CAM] if self.TABLE1_COL_TEN_CAM < len(row) else None
-            so_luong = row[self.TABLE1_COL_SO_LUONG] if self.TABLE1_COL_SO_LUONG < len(row) else None
-            
-            if pd.isna(ten_cam) or pd.isna(so_luong):
-                continue
-            
-            try:
-                so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
-            except (ValueError, TypeError):
-                continue
-            
-            if so_luong_val <= 0:
-                continue
-            
-            ten_cam_clean = str(ten_cam).strip()
-            
-            ngay_lay_str = None
-            if pd.notna(ngay_lay):
-                if isinstance(ngay_lay, datetime):
-                    ngay_lay_str = ngay_lay.strftime('%Y-%m-%d')
-                else:
-                    try:
-                        ngay_lay_str = str(ngay_lay)
-                    except:
-                        pass
-            
-            data.append({
-                'ten_cam': ten_cam_clean,
-                'ngay_lay': ngay_lay_str,
-                'so_luong': so_luong_val,
-                'source': 'table1'
-            })
+        # === BẢNG 1: Xe tải bao 25kg ===
+        total_row = self._find_total_row(df)
         
-        # Đọc bảng 2
-        for idx in range(self.START_ROW, len(df)):
-            row = df.iloc[idx]
+        # Lấy ngày từ hàng 7 (index 6)
+        dates = []
+        for col in self.TABLE1_DATE_COLS:
+            if col < len(df.columns):
+                dates.append(df.iloc[self.TABLE1_DATE_ROW, col])
+            else:
+                dates.append(None)
+        
+        # Duyệt qua các hàng sản phẩm
+        for row_idx in range(self.TABLE1_START_ROW, total_row):
+            product_code = df.iloc[row_idx, self.TABLE1_PRODUCT_COL]
             
-            ngay_lay = row[self.TABLE2_COL_NGAY_LAY] if self.TABLE2_COL_NGAY_LAY < len(row) else None
-            ten_cam = row[self.TABLE2_COL_TEN_CAM] if self.TABLE2_COL_TEN_CAM < len(row) else None
-            so_luong = row[self.TABLE2_COL_SO_LUONG] if self.TABLE2_COL_SO_LUONG < len(row) else None
-            
-            if pd.isna(ten_cam) or pd.isna(so_luong):
+            if pd.isna(product_code) or str(product_code).strip() == "":
                 continue
             
-            try:
-                so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
-            except (ValueError, TypeError):
-                continue
+            product_code_clean = str(product_code).strip()
             
-            if so_luong_val <= 0:
-                continue
+            # Duyệt qua từng cột ngày
+            for col_offset, col in enumerate(self.TABLE1_DATE_COLS):
+                if col >= len(df.columns):
+                    continue
+                    
+                qty = df.iloc[row_idx, col]
+                
+                if pd.isna(qty):
+                    continue
+                    
+                try:
+                    qty_val = float(qty)
+                except (ValueError, TypeError):
+                    continue
+                
+                if qty_val <= 0:
+                    continue
+                
+                date_val = dates[col_offset]
+                
+                data.append({
+                    'ten_cam': product_code_clean,
+                    'ngay_lay': self._format_date_db(date_val),
+                    'so_luong': int(qty_val * 25),  # Mỗi bao 25kg
+                    'source': 'table1'
+                })
+        
+        # === BẢNG 2: Xe bồn Silo ===
+        table2_header_row = self._find_table2_header(df)
+        
+        if table2_header_row >= 0:
+            table2_start = table2_header_row + 1
+            last_date = None
             
-            ten_cam_clean = str(ten_cam).strip()
-            
-            ngay_lay_str = None
-            if pd.notna(ngay_lay):
-                if isinstance(ngay_lay, datetime):
-                    ngay_lay_str = ngay_lay.strftime('%Y-%m-%d')
-                else:
-                    try:
-                        ngay_lay_str = str(ngay_lay)
-                    except:
-                        pass
-            
-            data.append({
-                'ten_cam': ten_cam_clean,
-                'ngay_lay': ngay_lay_str,
-                'so_luong': so_luong_val,
-                'source': 'table2'
-            })
+            for row_idx in range(table2_start, len(df)):
+                product_code = df.iloc[row_idx, self.TABLE2_PRODUCT_COL]
+                
+                if pd.isna(product_code) or str(product_code).strip() == "":
+                    continue
+                    
+                product_code_clean = str(product_code).strip()
+                
+                # Bỏ qua các dòng tổng cộng
+                if "TỔNG" in product_code_clean.upper() or "TOTAL" in product_code_clean.upper():
+                    continue
+                
+                qty = df.iloc[row_idx, self.TABLE2_QTY_COL]
+                
+                try:
+                    qty_val = float(qty) if pd.notna(qty) else 0
+                except (ValueError, TypeError):
+                    continue
+                    
+                if qty_val <= 0:
+                    continue
+                
+                # Xử lý ngày (có thể merged)
+                date_val = df.iloc[row_idx, self.TABLE2_DATE_COL]
+                if pd.notna(date_val):
+                    last_date = date_val
+                
+                data.append({
+                    'ten_cam': product_code_clean,
+                    'ngay_lay': self._format_date_db(last_date),
+                    'so_luong': int(qty_val),
+                    'source': 'table2'
+                })
         
         return data
     
     def _get_product_id(self, cursor, ten_cam: str) -> Optional[int]:
         """Tìm ID sản phẩm từ Tên cám"""
+        # Thử tìm theo Tên cám
         cursor.execute("""
             SELECT ID 
             FROM SanPham 
             WHERE TRIM([Tên cám]) = ? AND [Đã xóa] = 0
         """, (ten_cam,))
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+        
+        # Thử tìm theo Code cám (remove leading ')
+        ten_cam_clean = ten_cam.lstrip("'")
+        cursor.execute("""
+            SELECT ID 
+            FROM SanPham 
+            WHERE TRIM([Code cám]) = ? AND [Đã xóa] = 0
+        """, (ten_cam_clean,))
         result = cursor.fetchone()
         return result[0] if result else None
     
@@ -451,15 +575,21 @@ def test_bacang_importer():
     print("=== Test BaCangImporter ===")
     
     print("\n1. Lấy danh sách sheets:")
-    sheets = importer.get_available_sheets()
-    print(f"   Sheets: {sheets}")
+    try:
+        sheets = importer.get_available_sheets()
+        print(f"   Sheets: {sheets}")
+    except Exception as e:
+        print(f"   Error: {e}")
     
     print("\n2. Preview sheet cuối:")
-    df1, df2 = importer.preview_data(limit=5)
-    print("Bảng 1:")
-    print(df1)
-    print("\nBảng 2:")
-    print(df2)
+    try:
+        df1, df2 = importer.preview_data(limit=10)
+        print("Bảng 1 (Xe tải bao 25kg):")
+        print(df1)
+        print("\nBảng 2 (Xe bồn Silo):")
+        print(df2)
+    except Exception as e:
+        print(f"   Error: {e}")
     
     print("\n=== Test hoàn tất ===")
 

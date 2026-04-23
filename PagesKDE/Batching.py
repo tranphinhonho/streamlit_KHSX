@@ -25,13 +25,13 @@ def app(selected):
     
     # Tạo tabs
     tab1, tab2, tab3 = st.tabs([
-        "✍️ Nhập thủ công",
+        "📋 Danh sách Batching",
         "📁 Import Excel",
-        "📋 Danh sách Batching"
+        "✍️ Nhập thủ công"
     ])
     
-    # TAB 1: Nhập thủ công
-    with tab1:
+    # TAB 3: Nhập thủ công
+    with tab3:
         st.header("✍️ Nhập Batching thủ công")
         
         st.info("""
@@ -133,7 +133,7 @@ def app(selected):
                 st.success("✅ Loss bình thường")
         
         # Nút lưu
-        if st.button("💾 Lưu Batching", type="primary", use_container_width=True):
+        if st.button("💾 Lưu Batching", type="primary", width="stretch"):
             if san_pham:
                 # Tách ID sản phẩm
                 id_san_pham = san_pham.split('|')[-1].strip() if '|' in san_pham else None
@@ -236,7 +236,7 @@ def app(selected):
                     # Preview CSV
                     df_preview = pd.read_csv(tmp_path, header=None, encoding='utf-8-sig')
                     st.caption(f"📊 File CSV có {len(df_preview)} hàng x {len(df_preview.columns)} cột")
-                    st.dataframe(df_preview.head(20), use_container_width=True)
+                    st.dataframe(df_preview.head(20), width="stretch")
                     import_type = 'csv'
                 else:
                     # Preview XLSM/XLSX - dùng hàm preview
@@ -254,7 +254,7 @@ def app(selected):
                                 'Deviation (kg)': st.column_config.NumberColumn('Deviation (kg)', format='%,.2f'),
                                 'Deviation (%)': st.column_config.NumberColumn('Deviation (%)', format='%.2f'),
                             },
-                            use_container_width=True
+                            width="stretch"
                         )
                         import_type = 'xlsm'
                     else:
@@ -264,7 +264,7 @@ def app(selected):
                 # Import button
                 if import_type:
                     st.markdown("---")
-                    if st.button("📥 Import vào Database", type="primary", use_container_width=True):
+                    if st.button("📥 Import vào Database", type="primary", width="stretch"):
                         with st.spinner("Đang import..."):
                             ngay_sx_str = ngay_san_xuat.strftime('%Y-%m-%d')
                             username = st.session_state.get('username', 'system')
@@ -326,25 +326,48 @@ def app(selected):
                     st.code(traceback.format_exc())
     
     
-    # TAB 3: Danh sách Mixer
-    with tab3:
+    # TAB 1: Danh sách Mixer
+    with tab1:
         st.header("📋 Danh sách Batching")
         
+        # Lấy ngày gần nhất có dữ liệu
+        import sqlite3
+        try:
+            conn_check = sqlite3.connect('database_new.db')
+            cursor = conn_check.cursor()
+            cursor.execute("SELECT MAX([Ngày trộn]) FROM Mixer WHERE [Đã xóa] = 0")
+            latest = cursor.fetchone()[0]
+            conn_check.close()
+            
+            if latest:
+                parts = latest.split('-')
+                default_date = datetime(int(parts[0]), int(parts[1]), int(parts[2])).date()
+            else:
+                default_date = None
+        except:
+            default_date = None
+        
         # Bộ lọc
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            filter_date = st.date_input(
-                "Lọc theo ngày",
-                value=None,
-                help="Để trống để xem tất cả"
+            filter_date_from = st.date_input(
+                "Lọc từ ngày",
+                value=default_date,
+                help="Ngày bắt đầu lọc"
             )
         with col2:
+            filter_date_to = st.date_input(
+                "Đến ngày",
+                value=default_date,
+                help="Ngày kết thúc lọc"
+            )
+        with col3:
             filter_dich_den = st.selectbox(
                 "Lọc theo đích đến",
                 options=['Tất cả'] + DICH_DEN_OPTIONS,
                 help="Lọc theo Pellet hoặc Packing"
             )
-        with col3:
+        with col4:
             filter_ca = st.selectbox(
                 "Lọc theo ca",
                 options=['Tất cả'] + CA_SAN_XUAT,
@@ -353,15 +376,20 @@ def app(selected):
         
         # Build filter conditions
         col_where = {'Đã xóa': ('=', 0)}
-        if filter_date:
-            col_where['Ngày trộn'] = ('=', filter_date.strftime('%Y-%m-%d'))
+        if filter_date_from and filter_date_to:
+            col_where['Ngày trộn'] = {'Between': [filter_date_from.strftime('%Y-%m-%d'), filter_date_to.strftime('%Y-%m-%d')]}
+            # Mặc định hiển thị All khi lọc theo ngày
+            st.session_state.page_size = 'All'
+        elif filter_date_from:
+            col_where['Ngày trộn'] = ('>=', filter_date_from.strftime('%Y-%m-%d'))
+            st.session_state.page_size = 'All'
         if filter_dich_den != 'Tất cả':
             col_where['Đích đến'] = ('=', filter_dich_den)
         if filter_ca != 'Tất cả':
             col_where['Ca sản xuất'] = ('=', filter_ca)
         
         column_config = {
-            'Ngày trộn': st.column_config.DateColumn('Ngày trộn', format='DD/MM/YYYY'),
+            'Ngày trộn': st.column_config.TextColumn('Ngày trộn'),
             'Batch size': st.column_config.NumberColumn('Batch size (kg)', format="%,.0f"),
             'Số lượng thực tế': st.column_config.NumberColumn('SL thực tế (kg)', format="%,.0f"),
             'Loss (kg)': st.column_config.NumberColumn('Loss (kg)', format="%,.0f"),
@@ -369,6 +397,14 @@ def app(selected):
             'Thời gian tạo': st.column_config.DatetimeColumn('Thời gian tạo', format='DD/MM/YYYY HH:mm'),
             'Thời gian sửa': st.column_config.DatetimeColumn('Thời gian sửa', format='DD/MM/YYYY HH:mm')
         }
+        
+        # Hàm format ngày từ yyyy-mm-dd thành dd-mm-yyyy
+        def format_date_column(df):
+            if 'Ngày trộn' in df.columns:
+                df['Ngày trộn'] = df['Ngày trộn'].apply(
+                    lambda x: '-'.join(str(x).split('-')[::-1]) if x and '-' in str(x) else x
+                )
+            return df
         
         dataframe_with_selections(
             table_name="Mixer",
@@ -379,7 +415,7 @@ def app(selected):
             ],
             colums_disable=['ID', 'Mã mixer', 'Loss (kg)', 'Loss (%)', 'Người tạo', 'Thời gian tạo', 'Người sửa', 'Thời gian sửa'],
             col_where=col_where,
-            col_order={'ID': 'DESC'},
+            col_order={'Ngày trộn': 'DESC', 'ID': 'DESC'},
             joins=[
                 {
                     'table': 'SanPham',
@@ -390,7 +426,8 @@ def app(selected):
             ],
             column_config=column_config,
             key=f'Mixer_{st.session_state.df_key}',
-            join_user_info=False
+            join_user_info=False,
+            post_process_func=format_date_column
         )
         
         # Thống kê tổng hợp
@@ -401,8 +438,15 @@ def app(selected):
             import sqlite3
             conn = sqlite3.connect('database_new.db')
             
+            # Điều kiện lọc theo ngày
+            date_condition = ""
+            if filter_date_from and filter_date_to:
+                date_condition = f"AND [Ngày trộn] BETWEEN '{filter_date_from.strftime('%Y-%m-%d')}' AND '{filter_date_to.strftime('%Y-%m-%d')}'"
+            elif filter_date_from:
+                date_condition = f"AND [Ngày trộn] >= '{filter_date_from.strftime('%Y-%m-%d')}'"
+            
             # Query thống kê
-            stats_query = """
+            stats_query = f"""
                 SELECT 
                     COUNT(*) as total_batches,
                     SUM([Batch size]) as total_input,
@@ -411,6 +455,7 @@ def app(selected):
                     AVG([Loss (%)]) as avg_loss_percent
                 FROM Mixer
                 WHERE [Đã xóa] = 0
+                {date_condition}
             """
             
             stats = pd.read_sql_query(stats_query, conn)
@@ -419,7 +464,7 @@ def app(selected):
             if len(stats) > 0 and stats['total_batches'].iloc[0] > 0:
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Tổng batch", f"{stats['total_batches'].iloc[0]:,.0f}")
+                    st.metric("Tổng code cám", f"{stats['total_batches'].iloc[0]:,.0f}")
                 with col2:
                     st.metric("Tổng đầu vào", f"{stats['total_input'].iloc[0]:,.0f} kg")
                 with col3:
@@ -428,7 +473,7 @@ def app(selected):
                     avg_loss = stats['avg_loss_percent'].iloc[0] or 0
                     st.metric("TB Loss", f"{avg_loss:.2f}%")
             else:
-                st.info("Chưa có dữ liệu thống kê")
+                st.info("Chưa có dữ liệu thống kê cho ngày này")
                 
         except Exception as e:
             st.warning(f"Không thể tải thống kê: {e}")

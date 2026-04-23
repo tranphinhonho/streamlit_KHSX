@@ -248,7 +248,7 @@ def app(selected):
         with header_col1:
             st.subheader(f"📋 Chi tiết ngày {selected_day:02d}/{selected_month:02d}/{selected_year}")
         with header_col2:
-            if st.button("❌ Đóng", key="close_detail_top", use_container_width=True):
+            if st.button("❌ Đóng", key="close_detail_top", width="stretch"):
                 st.session_state.selected_calendar_date = None
                 st.rerun()
         
@@ -281,22 +281,22 @@ def app(selected):
         nav_col1, nav_col2, nav_col3, nav_col4 = st.columns(4)
         
         with nav_col1:
-            if st.button("📦 Đi tới Stock Old", key="nav_stockold", use_container_width=True, type="primary"):
+            if st.button("📦 Đi tới Stock Old", key="nav_stockold", width="stretch", type="primary"):
                 st.session_state.filter_date = selected_date
                 st.success(f"✅ Đã lưu ngày {selected_day:02d}/{selected_month:02d}/{selected_year}. Bây giờ click vào tab **'Stock Old'** ở thanh menu trên!")
         
         with nav_col2:
-            if st.button("📋 Đi tới Packing", key="nav_packing", use_container_width=True, type="primary"):
+            if st.button("📋 Đi tới Packing", key="nav_packing", width="stretch", type="primary"):
                 st.session_state.filter_date = selected_date
                 st.success(f"✅ Đã lưu ngày {selected_day:02d}/{selected_month:02d}/{selected_year}. Bây giờ click vào tab **'Packing'** ở thanh menu trên!")
         
         with nav_col3:
-            if st.button("💰 Đi tới Sale", key="nav_sale", use_container_width=True, type="primary"):
+            if st.button("💰 Đi tới Sale", key="nav_sale", width="stretch", type="primary"):
                 st.session_state.filter_date = selected_date
                 st.success(f"✅ Đã lưu ngày {selected_day:02d}/{selected_month:02d}/{selected_year}. Bây giờ click vào tab **'Sale'** ở thanh menu trên!")
         
         with nav_col4:
-            if st.button("📦 Đi tới Bao bì", key="nav_baobi", use_container_width=True, type="secondary"):
+            if st.button("📦 Đi tới Bao bì", key="nav_baobi", width="stretch", type="secondary"):
                 st.session_state.bagstock_filter_date = selected_date
                 st.success(f"✅ Đã lưu ngày {selected_day:02d}/{selected_month:02d}/{selected_year}. Bây giờ click vào tab **'Bao bì'** ở thanh menu trên!")
         
@@ -312,7 +312,7 @@ def app(selected):
             if data['stockold'] > 0:
                 df = get_detail_data(selected_date, 'stockold')
                 if df is not None and len(df) > 0:
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df, width="stretch", hide_index=True)
                 else:
                     st.info("Không có dữ liệu Stock Old")
             else:
@@ -322,7 +322,7 @@ def app(selected):
             if data['packing'] > 0:
                 df = get_detail_data(selected_date, 'packing')
                 if df is not None and len(df) > 0:
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df, width="stretch", hide_index=True)
                 else:
                     st.info("Không có dữ liệu Packing")
             else:
@@ -332,7 +332,7 @@ def app(selected):
             if data['sale'] > 0:
                 df = get_detail_data(selected_date, 'sale')
                 if df is not None and len(df) > 0:
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df, width="stretch", hide_index=True)
                 else:
                     st.info("Không có dữ liệu Sale")
             else:
@@ -399,7 +399,7 @@ def app(selected):
                     if st.button(
                         button_label,
                         key=f"day_{year}_{month}_{day}",
-                        use_container_width=True,
+                        width="stretch",
                         type=btn_type if has_data or is_today else "secondary"
                     ):
                         st.session_state.selected_calendar_date = f"{year}-{month:02d}-{day:02d}"

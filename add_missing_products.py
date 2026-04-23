@@ -1,53 +1,34 @@
-"""
-Script thêm nhanh 4 mã sản phẩm thiếu
-"""
+# -*- coding: utf-8 -*-
+"""Script them 8 san pham missing vao SanPham"""
 import sqlite3
 from datetime import datetime
 
-database_path = "database_new.db"
-conn = sqlite3.connect(database_path)
-cursor = conn.cursor()
-
-current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-# 4 mã cần thêm - bạn có thể điều chỉnh thông tin
-# Format: (Code cám, Tên cám, Kích cỡ ép viên, Kích cỡ đóng bao)
-san_pham_moi = [
-    ('433060', 'Sản phẩm 433060', '', 25),
-    ('433760', 'Sản phẩm 433760', '', 25),
-    ('31408887', 'Sản phẩm 31408887', '', 25),
-    ('332401', 'Sản phẩm 332401', '', 25),
+# 8 san pham can them
+products = [
+    ('6951XS87', 'H'),
+    ('GT12AN', 'G'),
+    ('566XS74', 'H'),
+    ('567SXS74', 'H'),
+    ('571', 'B'),
+    ('521PRO', 'G'),
+    ('GT11NS', 'G'),
+    ('544P', 'V'),
 ]
 
-print("=" * 60)
-print("THÊM SẢN PHẨM MỚI")
-print("=" * 60)
+conn = sqlite3.connect('database_new.db')
+cursor = conn.cursor()
 
-# Lấy max ID
-cursor.execute("SELECT MAX(ID) FROM SanPham")
-max_id = cursor.fetchone()[0] or 0
+now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+inserted = 0
 
-added = 0
-for code, ten, kich_co_ep, kich_co_bao in san_pham_moi:
-    # Kiểm tra đã tồn tại chưa
-    cursor.execute("SELECT ID FROM SanPham WHERE [Code cám] = ?", (code,))
-    if cursor.fetchone():
-        print(f"⚠️ {code} đã tồn tại, bỏ qua")
-        continue
-    
-    max_id += 1
+for code_cam, vat_nuoi in products:
     cursor.execute("""
-        INSERT INTO SanPham (
-            ID, [Code cám], [Tên cám], [Kích cỡ ép viên], [Kích cỡ đóng bao],
-            [Người tạo], [Thời gian tạo], [Đã xóa]
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-    """, (max_id, code, ten, kich_co_ep, kich_co_bao, 'phinho', current_time))
-    
-    print(f"✅ Đã thêm: {code} - {ten}")
-    added += 1
+        INSERT INTO SanPham ([Code cám], [Tên cám], [Vật nuôi], [Người tạo], [Thời gian tạo], [Đã xóa])
+        VALUES (?, ?, ?, ?, ?, 0)
+    """, (code_cam, code_cam, vat_nuoi, 'system', now))
+    inserted += 1
 
 conn.commit()
 conn.close()
 
-print(f"\n✅ Đã thêm {added} sản phẩm mới")
-print("Bây giờ bạn có thể import lại file FFSTOCK")
+print(f"Inserted: {inserted} products")

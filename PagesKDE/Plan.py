@@ -84,7 +84,7 @@ def app(selected):
             if ngay_ke_hoach != ngay_ke_hoach_goc:
                 st.warning(f"⚠️ Ngày {ngay_ke_hoach_goc.strftime('%d/%m/%Y')} là Chủ nhật. Đã chuyển sang Thứ 2 ngày {ngay_ke_hoach.strftime('%d/%m/%Y')}")
         
-        if st.button("🔄 Tính toán Kế hoạch", type="primary", use_container_width=True):
+        if st.button("🔄 Tính toán Kế hoạch", type="primary", width="stretch"):
             with st.spinner("Đang tính toán kế hoạch..."):
                 ke_hoach = tinh_toan_ke_hoach(ngay_ke_hoach)
                 if ke_hoach:
@@ -98,6 +98,165 @@ def app(selected):
     
     with tab2:
         st.header("✍️ Nhập kế hoạch thủ công")
+        
+        # === SECTION: Xử lý dữ liệu chuyển từ Đặt hàng ===
+        if 'plan_transfer_data' in st.session_state and st.session_state['plan_transfer_data']:
+            transfer_info = st.session_state['plan_transfer_data']
+            
+            with st.expander(f"📥 **Dữ liệu từ {transfer_info['source']}** - {len(transfer_info['data'])} sản phẩm", expanded=True):
+                st.info(f"📅 Ngày lấy: **{transfer_info['ngay_lay']}** | Sheet: **{transfer_info.get('sheet', 'N/A')}**")
+                
+                # Tạo DataFrame để hiển thị và xử lý
+                transfer_df = pd.DataFrame(transfer_info['data'])
+                
+                # Tìm ID sản phẩm từ Tên cám
+                conn = sqlite3.connect('database_new.db')
+                cursor = conn.cursor()
+                
+                processed_data = []
+                not_found = []
+                
+                for _, row in transfer_df.iterrows():
+                    ten_cam = str(row.get('Tên cám', '')).strip()
+                    so_luong = row.get('Số lượng', 0)
+                    ngay_lay_raw = row.get('Ngày lấy', '')
+                    nguon = row.get('Nguồn', '')
+                    
+                    # Tìm sản phẩm từ Tên cám
+                    cursor.execute("""
+                        SELECT ID, [Code cám], [Tên cám] 
+                        FROM SanPham 
+                        WHERE [Tên cám] = ? AND [Đã xóa] = 0
+                    """, (ten_cam,))
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        id_sp, code_cam, ten_sp = result
+                        
+                        # Lấy Batch size của sản phẩm
+                        cursor.execute("SELECT [Batch size] FROM SanPham WHERE ID = ?", (id_sp,))
+                        batch_result = cursor.fetchone()
+                        batch_size = batch_result[0] if batch_result and batch_result[0] else 2800
+                        
+                        # Tính ngày plan 
+                        # Ưu tiên: Ngày plan (nếu có) > Ngày lấy - 1 ngày > Ngày hiện tại
+                        try:
+                            ngay_plan_raw = row.get('Ngày plan', '')
+                            if ngay_plan_raw and str(ngay_plan_raw).strip() and str(ngay_plan_raw).strip().lower() != 'none':
+                                # Dùng Ngày plan trực tiếp nếu có
+                                if isinstance(ngay_plan_raw, str) and '/' in ngay_plan_raw:
+                                    ngay_plan_dt = pd.to_datetime(ngay_plan_raw, format='%d/%m/%Y')
+                                else:
+                                    ngay_plan_dt = pd.to_datetime(ngay_plan_raw)
+                                ngay_plan = ngay_plan_dt.strftime('%Y-%m-%d')
+                            elif ngay_lay_raw and str(ngay_lay_raw).strip():
+                                # Tính từ Ngày lấy - 1 ngày
+                                if isinstance(ngay_lay_raw, str) and '/' in ngay_lay_raw:
+                                    ngay_lay_dt = pd.to_datetime(ngay_lay_raw, format='%d/%m/%Y')
+                                else:
+                                    ngay_lay_dt = pd.to_datetime(ngay_lay_raw)
+                                ngay_plan = (ngay_lay_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+                            else:
+                                # Mặc định: ngày hiện tại
+                                ngay_plan = fn.get_vietnam_time().strftime('%Y-%m-%d')
+                        except:
+                            ngay_plan = fn.get_vietnam_time().strftime('%Y-%m-%d')
+                        
+                        # Tính số Batch
+                        so_luong = row.get('Số lượng', 0)
+                        so_batch = so_luong / batch_size if batch_size > 0 else 0
+                        
+                        processed_data.append({
+                            'ID sản phẩm': id_sp,
+                            'Code cám': code_cam,
+                            'Tên cám': ten_sp,
+                            'Batch size': batch_size,
+                            'Batch': round(so_batch, 1),
+                            'Số lượng': so_luong,
+                            'Ngày plan': ngay_plan,
+                            'Ghi chú': f"{nguon} - Ngày lấy {ngay_lay_raw}"
+                        })
+                    else:
+                        not_found.append(ten_cam)
+                
+                conn.close()
+                
+                if not_found:
+                    st.warning(f"⚠️ Không tìm thấy {len(not_found)} sản phẩm: {', '.join(not_found[:10])}")
+                
+                if processed_data:
+                    processed_df = pd.DataFrame(processed_data)
+                    
+                    # Khởi tạo session state cho dữ liệu chỉnh sửa
+                    if 'plan_edit_df' not in st.session_state or st.session_state.get('plan_edit_source') != transfer_info['source']:
+                        st.session_state.plan_edit_df = processed_df.copy()
+                        st.session_state.plan_edit_source = transfer_info['source']
+                    
+                    # Sử dụng data_editor để cho phép chỉnh sửa cột Batch
+                    edited_df = st.data_editor(
+                        st.session_state.plan_edit_df[['Code cám', 'Tên cám', 'Batch size', 'Batch', 'Số lượng', 'Ngày plan', 'Ghi chú']],
+                        width="stretch",
+                        hide_index=True,
+                        disabled=['Code cám', 'Tên cám', 'Batch size', 'Ngày plan', 'Ghi chú'],
+                        column_config={
+                            'Batch size': st.column_config.NumberColumn('Batch size', format='%d', width='small'),
+                            'Batch': st.column_config.NumberColumn('Batch', format='%.1f', width='small', help='Nhập số batch, Số lượng = Batch × Batch size'),
+                            'Số lượng': st.column_config.NumberColumn('Số lượng (kg)', format='%,.0f', width='medium')
+                        },
+                        key='plan_transfer_editor'
+                    )
+                    
+                    # Cập nhật Số lượng khi Batch thay đổi
+                    for idx in range(len(edited_df)):
+                        new_batch = edited_df.iloc[idx]['Batch']
+                        batch_size = st.session_state.plan_edit_df.iloc[idx]['Batch size']
+                        new_qty = int(new_batch * batch_size)
+                        if new_qty != st.session_state.plan_edit_df.iloc[idx]['Số lượng']:
+                            st.session_state.plan_edit_df.at[idx, 'Batch'] = new_batch
+                            st.session_state.plan_edit_df.at[idx, 'Số lượng'] = new_qty
+                            st.rerun()
+                    
+                    total_kg = edited_df['Số lượng'].sum()
+                    st.success(f"✅ **{len(processed_data)}** sản phẩm | Tổng: **{total_kg:,.0f} kg** ({total_kg/1000:,.1f} tấn)")
+                    
+                    col_action1, col_action2 = st.columns([1, 1])
+                    
+                    with col_action1:
+                        if st.button("💾 Lưu vào Plan", type="primary", key="btn_save_transfer"):
+                            maplan = ss.generate_next_code(tablename='Plan', column_name='Mã plan', prefix='PL', num_char=5)
+                            
+                            # Chuẩn bị dữ liệu từ edited df (đã được chỉnh sửa)
+                            insert_df = st.session_state.plan_edit_df[['ID sản phẩm', 'Số lượng', 'Ngày plan', 'Ghi chú']].copy()
+                            insert_df['Mã plan'] = maplan
+                            insert_df['Người tạo'] = st.session_state.get('username', 'system')
+                            insert_df['Thời gian tạo'] = fn.get_vietnam_time()
+                            
+                            result = ss.insert_data_to_sql_server(table_name='Plan', dataframe=insert_df)
+                            
+                            # Kiểm tra kết quả - function trả về "Đã cập nhật thành công!" khi thành công
+                            if result is None or (isinstance(result, str) and 'thành công' in result.lower()):
+                                st.success(f"🎉 Đã lưu **{len(insert_df)}** sản phẩm vào Plan với mã: **{maplan}**")
+                                st.balloons()
+                                # Xóa dữ liệu chuyển sau khi lưu thành công
+                                del st.session_state['plan_transfer_data']
+                                if 'plan_edit_df' in st.session_state:
+                                    del st.session_state['plan_edit_df']
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Lỗi: {result}")
+                    
+                    with col_action2:
+                        if st.button("🗑️ Hủy dữ liệu", type="secondary", key="btn_cancel_transfer"):
+                            del st.session_state['plan_transfer_data']
+                            st.rerun()
+                else:
+                    st.error("❌ Không có sản phẩm nào có thể xử lý!")
+                    if st.button("🗑️ Xóa dữ liệu", key="btn_clear_transfer"):
+                        del st.session_state['plan_transfer_data']
+                        st.rerun()
+            
+            st.divider()
+        
         subtab1, subtab2 = st.tabs(["✍️ Nhập tay", "📁 Import Excel"])
         
         with subtab1:
@@ -149,37 +308,237 @@ def app(selected):
     
     with tab3:
         st.header("📋 Danh sách plan hiện tại")
+        # Sử dụng TextColumn cho Ngày plan vì dữ liệu có thể là string hoặc date mixed
         column_config = {
-            'Ngày plan': st.column_config.DateColumn('Ngày plan', format='DD/MM/YYYY'),
-            'Thời gian tạo': st.column_config.DatetimeColumn('Thời gian tạo', format='DD/MM/YYYY HH:mm:ss'),
-            'Thời gian sửa': st.column_config.DatetimeColumn('Thời gian sửa', format='DD/MM/YYYY HH:mm:ss')
+            'Ngày plan': st.column_config.TextColumn('Ngày plan', width='small'),
+            'Thời gian tạo': st.column_config.TextColumn('Thời gian tạo', width='medium'),
+            'Thời gian sửa': st.column_config.TextColumn('Thời gian sửa', width='medium'),
+            'Số lượng': st.column_config.NumberColumn('Số lượng', format='%,.0f'),
+            'Pellet': st.column_config.TextColumn('Pellet', width='small'),
+            'Packing': st.column_config.TextColumn('Packing', width='small')
         }
-        dataframe_with_selections(table_name="Plan", columns=['ID', 'ID sản phẩm', 'Mã plan', 'Số lượng', 'Ngày plan', 'Ghi chú', 'Người tạo', 'Thời gian tạo', 'Người sửa', 'Thời gian sửa'], colums_disable=['ID','Mã plan','Người tạo','Thời gian tạo','Người sửa','Thời gian sửa','Fullname'], col_where={'Đã xóa': ('=', 0)}, col_order={'ID': 'DESC'}, joins=[{'table': 'SanPham', 'on': {'ID sản phẩm': 'ID'}, 'columns': ['Code cám','Tên cám','Dạng ép viên','Kích cỡ ép viên'], 'replace_multi':{'ID sản phẩm':['Code cám','Tên cám','Dạng ép viên','Kích cỡ ép viên']}}], column_config=column_config, key=f'Plan_{st.session_state.df_key}', join_user_info=True)
+        dataframe_with_selections(table_name="Plan", columns=['ID', 'ID sản phẩm', 'Mã plan', 'Số lượng', 'Ngày plan', 'Ghi chú', 'Người tạo', 'Thời gian tạo', 'Người sửa', 'Thời gian sửa'], colums_disable=['ID','Mã plan','Người tạo','Thời gian tạo','Người sửa','Thời gian sửa','Fullname'], col_where={'Đã xóa': ('=', 0)}, col_order={'ID': 'DESC'}, joins=[{'table': 'SanPham', 'on': {'ID sản phẩm': 'ID'}, 'columns': ['Code cám','Tên cám','Dạng ép viên','Kích cỡ ép viên','Pellet','Packing'], 'replace_multi':{'ID sản phẩm':['Code cám','Tên cám','Dạng ép viên','Kích cỡ ép viên']}}], column_config=column_config, key=f'Plan_{st.session_state.df_key}', join_user_info=True)
         
+        # === TỔNG SẢN LƯỢNG THEO NGÀY ===
         st.markdown("---")
-        st.markdown("### 🗑️ Xóa kế hoạch theo ngày")
-        col1, col2, col3 = st.columns([2, 1, 2])
-        with col1:
-            ngay_xoa = st.date_input("Chọn ngày cần xóa", value=fn.get_vietnam_time().date(), help="Chọn ngày để xóa TẤT CẢ plan cho ngày đó", key="date_delete_plan")
-        with col2:
-            if st.button("🗑️ Xóa tất cả", type="secondary", key="btn_delete_all_plan"):
+        st.markdown("### 📊 Tổng sản lượng theo ngày")
+        
+        col_sum1, col_sum2 = st.columns([2, 3])
+        with col_sum1:
+            ngay_tong = st.date_input(
+                "Chọn ngày", 
+                value=fn.get_vietnam_time().date(), 
+                key="date_total_plan"
+            )
+        
+        # Tính tổng sản lượng
+        conn = sqlite3.connect('database_new.db')
+        cursor = conn.cursor()
+        ngay_str = ngay_tong.strftime('%Y-%m-%d')
+        ngay_str_alt = ngay_tong.strftime('%d/%m/%Y')
+        
+        cursor.execute("""
+            SELECT 
+                COUNT(DISTINCT [ID sản phẩm]) as so_sp,
+                COUNT(*) as so_dong,
+                COALESCE(SUM([Số lượng]), 0) as tong
+            FROM Plan 
+            WHERE ([Ngày plan] = ? OR [Ngày plan] = ?) AND [Đã xóa] = 0
+        """, (ngay_str, ngay_str_alt))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        so_sp, so_dong, tong_sl = result if result else (0, 0, 0)
+        
+        with col_sum2:
+            if tong_sl > 0:
+                col_m1, col_m3 = st.columns(2)
+                with col_m1:
+                    st.metric("📦 Sản phẩm", f"{so_sp}")
+                with col_m3:
+                    st.metric("⚖️ Tổng sản lượng", f"{tong_sl:,.0f} kg", f"{tong_sl/1000:,.1f} tấn")
+            else:
+                st.info(f"Không có plan cho ngày {ngay_tong.strftime('%d/%m/%Y')}")
+        
+        # === NÚT CHUYỂN QUA PELLET PLAN ===
+        st.markdown("---")
+        st.markdown("### 📤 Chuyển qua Pellet Plan")
+        
+        # Chọn ngày Plan để chuyển
+        col_pellet1, col_pellet2 = st.columns([2, 1])
+        with col_pellet1:
+            ngay_chuyen = st.date_input(
+                "Chọn ngày Plan cần chuyển", 
+                value=fn.get_vietnam_time().date(), 
+                help="Chọn ngày có Plan để chuyển sang Pellet Plan",
+                key="date_transfer_pellet"
+            )
+        
+        with col_pellet2:
+            if st.button("📤 Chuyển qua Pellet Plan", type="primary", key="btn_transfer_pellet"):
                 conn = sqlite3.connect('database_new.db')
                 cursor = conn.cursor()
-                ngay_str = ngay_xoa.strftime('%Y-%m-%d')
-                ngay_str_alt = ngay_xoa.strftime('%d/%m/%Y')
-                cursor.execute("SELECT COUNT(*) FROM Plan WHERE ([Ngày plan] = ? OR [Ngày plan] = ?) AND [Đã xóa] = 0", (ngay_str, ngay_str_alt))
-                count = cursor.fetchone()[0]
+                
+                ngay_str = ngay_chuyen.strftime('%Y-%m-%d')
+                ngay_str_alt = ngay_chuyen.strftime('%d/%m/%Y')
+                
+                # Query và gộp các code cám trùng
+                cursor.execute("""
+                    SELECT 
+                        p.[ID sản phẩm],
+                        sp.[Code cám],
+                        sp.[Tên cám],
+                        sp.[Dạng ép viên],
+                        SUM(p.[Số lượng]) as TongSoLuong
+                    FROM Plan p
+                    LEFT JOIN SanPham sp ON p.[ID sản phẩm] = sp.ID
+                    WHERE p.[Đã xóa] = 0 
+                    AND (p.[Ngày plan] = ? OR p.[Ngày plan] = ?)
+                    GROUP BY p.[ID sản phẩm], sp.[Code cám], sp.[Tên cám], sp.[Dạng ép viên]
+                    ORDER BY TongSoLuong DESC
+                """, (ngay_str, ngay_str_alt))
+                
+                results = cursor.fetchall()
                 conn.close()
-                if count > 0:
-                    st.session_state['confirm_delete_date'] = ngay_xoa
-                    st.session_state['confirm_delete_count'] = count
+                
+                if results:
+                    # Lưu vào session_state để Pellet.py sử dụng
+                    merged_data = []
+                    for row in results:
+                        id_sp, code_cam, ten_cam, dang_ep, tong_sl = row
+                        merged_data.append({
+                            'ID sản phẩm': id_sp,
+                            'Code cám': code_cam,
+                            'Tên cám': ten_cam,
+                            'Dạng ép viên': dang_ep,
+                            'Số lượng': tong_sl
+                        })
+                    
+                    st.session_state['pellet_transfer_data'] = {
+                        'data': merged_data,
+                        'ngay': ngay_chuyen,
+                        'source': f'Plan ngày {ngay_chuyen.strftime("%d/%m/%Y")}'
+                    }
+                    
+                    # Thống kê
+                    cursor_count = sqlite3.connect('database_new.db').cursor()
+                    cursor_count.execute("""
+                        SELECT COUNT(*) FROM Plan 
+                        WHERE [Đã xóa] = 0 AND ([Ngày plan] = ? OR [Ngày plan] = ?)
+                    """, (ngay_str, ngay_str_alt))
+                    original_count = cursor_count.fetchone()[0]
+                    cursor_count.connection.close()
+                    
+                    tong_kg = sum(item['Số lượng'] for item in merged_data)
+                    
+                    st.success(f"✅ Đã gộp **{original_count}** dòng → **{len(merged_data)}** sản phẩm unique")
+                    st.info(f"📊 Tổng: **{tong_kg:,.0f} kg** ({tong_kg/1000:.1f} tấn)")
+                    st.info("👉 Vào **Pellet Plan > Phân bổ tự động** để xem và phân bổ máy.")
                 else:
-                    st.warning(f"⚠️ Không có plan nào cho ngày {ngay_xoa.strftime('%d/%m/%Y')}")
+                    st.warning(f"⚠️ Không có Plan nào cho ngày {ngay_chuyen.strftime('%d/%m/%Y')}")
         
+        # Hiển thị dữ liệu đã gộp nếu có
+        if 'pellet_transfer_data' in st.session_state:
+            with st.expander(f"📋 Preview dữ liệu đã gộp - {st.session_state['pellet_transfer_data']['source']}", expanded=True):
+                df_preview = pd.DataFrame(st.session_state['pellet_transfer_data']['data'])
+                df_preview['Số lượng (tấn)'] = df_preview['Số lượng'] / 1000
+                st.dataframe(df_preview, width='stretch', hide_index=True)
+                
+                if st.button("🗑️ Xóa dữ liệu preview", key="btn_clear_pellet_preview"):
+                    del st.session_state['pellet_transfer_data']
+                    st.rerun()
+        
+        st.markdown("---")
+        st.markdown("### 🗑️ Xóa kế hoạch theo ngày / Mã plan")
+        
+        # Chọn ngày và lấy danh sách Mã plan của ngày đó
+        col1, col2, col3 = st.columns([2, 2, 1])
+        with col1:
+            ngay_xoa = st.date_input("Chọn ngày cần xóa", value=fn.get_vietnam_time().date(), help="Chọn ngày để lọc plan", key="date_delete_plan")
+        
+        # Lấy danh sách Mã plan theo ngày
+        conn = sqlite3.connect('database_new.db')
+        cursor = conn.cursor()
+        ngay_str = ngay_xoa.strftime('%Y-%m-%d')
+        ngay_str_alt = ngay_xoa.strftime('%d/%m/%Y')
+        cursor.execute("""
+            SELECT DISTINCT [Mã plan], COUNT(*) as cnt, SUM([Số lượng]) as tong
+            FROM Plan 
+            WHERE ([Ngày plan] = ? OR [Ngày plan] = ?) AND [Đã xóa] = 0
+            GROUP BY [Mã plan]
+            ORDER BY [Mã plan] DESC
+        """, (ngay_str, ngay_str_alt))
+        ma_plan_list = cursor.fetchall()
+        conn.close()
+        
+        with col2:
+            if ma_plan_list:
+                # Tạo options với thông tin chi tiết
+                options = ["-- Tất cả --"] + [f"{row[0]} ({row[1]} SP - {row[2]:,.0f} kg)" for row in ma_plan_list]
+                ma_plan_values = [None] + [row[0] for row in ma_plan_list]
+                
+                selected_idx = st.selectbox(
+                    "Chọn Mã plan", 
+                    range(len(options)), 
+                    format_func=lambda x: options[x],
+                    key="select_ma_plan_delete"
+                )
+                selected_ma_plan = ma_plan_values[selected_idx]
+            else:
+                st.info(f"Không có plan cho ngày {ngay_xoa.strftime('%d/%m/%Y')}")
+                selected_ma_plan = None
+        
+        with col3:
+            if ma_plan_list:
+                if st.button("🗑️ Xóa", type="secondary", key="btn_delete_plan"):
+                    conn = sqlite3.connect('database_new.db')
+                    cursor = conn.cursor()
+                    
+                    if selected_ma_plan:
+                        # Xóa theo Mã plan cụ thể
+                        cursor.execute("SELECT COUNT(*) FROM Plan WHERE [Mã plan] = ? AND [Đã xóa] = 0", (selected_ma_plan,))
+                        count = cursor.fetchone()[0]
+                        st.session_state['confirm_delete_maplan'] = selected_ma_plan
+                    else:
+                        # Xóa tất cả theo ngày
+                        cursor.execute("SELECT COUNT(*) FROM Plan WHERE ([Ngày plan] = ? OR [Ngày plan] = ?) AND [Đã xóa] = 0", (ngay_str, ngay_str_alt))
+                        count = cursor.fetchone()[0]
+                        st.session_state['confirm_delete_date'] = ngay_xoa
+                    
+                    conn.close()
+                    st.session_state['confirm_delete_count'] = count
+        
+        # Xác nhận xóa theo Mã plan
+        if 'confirm_delete_maplan' in st.session_state:
+            ma_plan = st.session_state['confirm_delete_maplan']
+            count = st.session_state['confirm_delete_count']
+            st.error(f"⚠️ **XÁC NHẬN XÓA**\n\nBạn có chắc muốn xóa **{count} sản phẩm** của mã plan **{ma_plan}**?\n\nHành động này KHÔNG thể hoàn tác!")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("✅ Xác nhận XÓA", type="primary", key="confirm_yes_maplan"):
+                    conn = sqlite3.connect('database_new.db')
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE Plan SET [Đã xóa] = 1, [Người sửa] = ?, [Thời gian sửa] = ? WHERE [Mã plan] = ? AND [Đã xóa] = 0", 
+                                   (st.session_state.username, fn.get_vietnam_time(), ma_plan))
+                    conn.commit()
+                    deleted = cursor.rowcount
+                    conn.close()
+                    st.success(f"✅ Đã xóa {deleted} sản phẩm của mã plan {ma_plan}")
+                    del st.session_state['confirm_delete_maplan']
+                    del st.session_state['confirm_delete_count']
+                    st.rerun()
+            with col_no:
+                if st.button("❌ Hủy", key="confirm_no_maplan"):
+                    del st.session_state['confirm_delete_maplan']
+                    del st.session_state['confirm_delete_count']
+                    st.rerun()
+        
+        # Xác nhận xóa theo ngày (tất cả)
         if 'confirm_delete_date' in st.session_state:
             ngay = st.session_state['confirm_delete_date']
             count = st.session_state['confirm_delete_count']
-            st.error(f"⚠️ **XÁC NHẬN XÓA**\n\nBạn có chắc muốn xóa **{count} plan** cho ngày **{ngay.strftime('%d/%m/%Y')}**?\n\nHành động này KHÔNG thể hoàn tác!")
+            st.error(f"⚠️ **XÁC NHẬN XÓA**\n\nBạn có chắc muốn xóa **TẤT CẢ {count} plan** cho ngày **{ngay.strftime('%d/%m/%Y')}**?\n\nHành động này KHÔNG thể hoàn tác!")
             col_yes, col_no = st.columns(2)
             with col_yes:
                 if st.button("✅ Xác nhận XÓA", type="primary", key="confirm_yes"):
@@ -207,6 +566,10 @@ def tinh_toan_ke_hoach(ngay_ke_hoach):
         cursor = conn.cursor()
         ngay_str = ngay_ke_hoach.strftime('%Y-%m-%d')
         ngay_str_alt = ngay_ke_hoach.strftime('%d/%m/%Y')
+        
+        # Ngày lấy hàng = ngày kế hoạch + 1 (SX hôm nay → Giao ngày mai)
+        ngay_lay = (ngay_ke_hoach + timedelta(days=1)).strftime('%Y-%m-%d')
+        ngay_lay_alt = (ngay_ke_hoach + timedelta(days=1)).strftime('%d/%m/%Y')
         
         cursor.execute("""
             SELECT p.[ID sản phẩm], sp.[Code cám], sp.[Tên cám], p.[Số lượng], p.[Ghi chú], p.[Mã plan], COALESCE(sh.[Số lượng], 0) as stock
@@ -250,17 +613,37 @@ def tinh_toan_ke_hoach(ngay_ke_hoach):
                 forecast_ngay = forecast_tuan / 7
                 doh = stock / forecast_ngay if forecast_ngay > 0 else 999
                 ghi_chu = f"Bao 50kg - Chia đều 5 ngày (ngày {ngay_thu + 1}/5)" if ngay_thu != 4 else "Bao 50kg - Thứ 6: Kiểm tra và SX đủ Forecast"
-                danh_sach_uu_tien.append({'id_sanpham': id_sp, 'code': code, 'ten': ten, 'so_luong': so_luong, 'stock': stock, 'doh': doh, 'ghi_chu': ghi_chu, 'uu_tien': 1, 'loai': 'Bao 50kg'})
+                danh_sach_uu_tien.append({'id_sanpham': id_sp, 'code': code, 'ten': ten, 'so_luong': so_luong, 'stock': stock, 'doh': doh, 'ghi_chu': ghi_chu, 'uu_tien': 3, 'loai': 'Bao 50kg'})
         
-        cursor.execute("SELECT dh.[ID sản phẩm], sp.[Code cám], sp.[Tên cám], SUM(dh.[Số lượng]) as tong, COALESCE(sh.[Số lượng], 0) as stock FROM DatHang dh JOIN SanPham sp ON dh.[ID sản phẩm] = sp.ID LEFT JOIN StockHomNay sh ON sp.ID = sh.[ID sản phẩm] AND sh.[Đã xóa] = 0 WHERE dh.[Loại đặt hàng] = 'Đại lý Bá Cang' AND dh.[Ngày lấy] = ? AND dh.[Đã xóa] = 0 GROUP BY dh.[ID sản phẩm], sp.[Code cám], sp.[Tên cám]", (ngay_str,))
+        # Đơn Bá Cang: Ngày lấy = ngày kế hoạch + 1 (SX hôm nay → Giao ngày mai)
+        cursor.execute("""
+            SELECT dh.[ID sản phẩm], sp.[Code cám], sp.[Tên cám], SUM(dh.[Số lượng]) as tong, COALESCE(sh.[Số lượng], 0) as stock 
+            FROM DatHang dh 
+            JOIN SanPham sp ON dh.[ID sản phẩm] = sp.ID 
+            LEFT JOIN StockHomNay sh ON sp.ID = sh.[ID sản phẩm] AND sh.[Đã xóa] = 0 
+            WHERE dh.[Loại đặt hàng] = 'Đại lý Bá Cang' 
+            AND (dh.[Ngày lấy] = ? OR dh.[Ngày lấy] = ?) 
+            AND dh.[Đã xóa] = 0 
+            GROUP BY dh.[ID sản phẩm], sp.[Code cám], sp.[Tên cám]
+        """, (ngay_lay, ngay_lay_alt))
         for row in cursor.fetchall():
             id_sp, code, ten, so_luong, stock = row
-            danh_sach_uu_tien.append({'id_sanpham': id_sp, 'code': code, 'ten': ten, 'so_luong': so_luong, 'stock': stock, 'doh': 0, 'ghi_chu': 'Đơn Bá Cang - SX hôm nay → Giao ngày mai', 'uu_tien': 2, 'loai': 'Đơn hàng'})
+            danh_sach_uu_tien.append({'id_sanpham': id_sp, 'code': code, 'ten': ten, 'so_luong': so_luong, 'stock': stock, 'doh': 0, 'ghi_chu': f'Đơn Bá Cang - SX {ngay_ke_hoach.strftime("%d/%m")} → Giao {(ngay_ke_hoach + timedelta(days=1)).strftime("%d/%m")}', 'uu_tien': 1, 'loai': 'Đơn hàng'})
         
-        cursor.execute("SELECT dh.[ID sản phẩm], sp.[Code cám], sp.[Tên cám], SUM(dh.[Số lượng]) as tong, COALESCE(sh.[Số lượng], 0) as stock FROM DatHang dh JOIN SanPham sp ON dh.[ID sản phẩm] = sp.ID LEFT JOIN StockHomNay sh ON sp.ID = sh.[ID sản phẩm] AND sh.[Đã xóa] = 0 WHERE dh.[Loại đặt hàng] = 'Xe bồn Silo' AND dh.[Ngày lấy] = ? AND dh.[Đã xóa] = 0 GROUP BY dh.[ID sản phẩm], sp.[Code cám], sp.[Tên cám]", (ngay_str,))
+        # Xe bồn Silo: Ngày lấy = ngày kế hoạch + 1 (SX hôm nay → Xe lấy ngày mai)
+        cursor.execute("""
+            SELECT dh.[ID sản phẩm], sp.[Code cám], sp.[Tên cám], SUM(dh.[Số lượng]) as tong, COALESCE(sh.[Số lượng], 0) as stock 
+            FROM DatHang dh 
+            JOIN SanPham sp ON dh.[ID sản phẩm] = sp.ID 
+            LEFT JOIN StockHomNay sh ON sp.ID = sh.[ID sản phẩm] AND sh.[Đã xóa] = 0 
+            WHERE dh.[Loại đặt hàng] = 'Xe bồn Silo' 
+            AND (dh.[Ngày lấy] = ? OR dh.[Ngày lấy] = ?) 
+            AND dh.[Đã xóa] = 0 
+            GROUP BY dh.[ID sản phẩm], sp.[Code cám], sp.[Tên cám]
+        """, (ngay_lay, ngay_lay_alt))
         for row in cursor.fetchall():
             id_sp, code, ten, so_luong, stock = row
-            danh_sach_uu_tien.append({'id_sanpham': id_sp, 'code': code, 'ten': ten, 'so_luong': so_luong, 'stock': stock, 'doh': 0, 'ghi_chu': 'Đơn Xe Silo - SX → Chứa Silo → Xe lấy ngày mai', 'uu_tien': 2, 'loai': 'Đơn hàng'})
+            danh_sach_uu_tien.append({'id_sanpham': id_sp, 'code': code, 'ten': ten, 'so_luong': so_luong, 'stock': stock, 'doh': 0, 'ghi_chu': f'Xe Silo - SX {ngay_ke_hoach.strftime("%d/%m")} → Lấy {(ngay_ke_hoach + timedelta(days=1)).strftime("%d/%m")}', 'uu_tien': 1, 'loai': 'Đơn hàng'})
         
         cursor.execute("SELECT sp.ID, sp.[Code cám], sp.[Tên cám], COALESCE(sh.[Số lượng], 0) as stock, COALESCE(fc.[Số lượng], 0) as forecast FROM SanPham sp LEFT JOIN StockHomNay sh ON sp.ID = sh.[ID sản phẩm] AND sh.[Đã xóa] = 0 LEFT JOIN (SELECT [ID sản phẩm], SUM([Số lượng]) as [Số lượng] FROM DatHang WHERE [Loại đặt hàng] = 'Forecast tuần' AND [Đã xóa] = 0 GROUP BY [ID sản phẩm]) fc ON sp.ID = fc.[ID sản phẩm] WHERE sp.[Đã xóa] = 0")
         for row in cursor.fetchall():
@@ -275,7 +658,7 @@ def tinh_toan_ke_hoach(ngay_ke_hoach):
                     else:
                         so_luong_sx = forecast_ngay * 3
                         ghi_chu = f"DoH={doh:.1f} → SX 3 ngày"
-                    danh_sach_uu_tien.append({'id_sanpham': id_sp, 'code': code, 'ten': ten, 'so_luong': so_luong_sx, 'stock': stock, 'doh': doh, 'ghi_chu': ghi_chu, 'uu_tien': 3, 'loai': 'Forecast'})
+                    danh_sach_uu_tien.append({'id_sanpham': id_sp, 'code': code, 'ten': ten, 'so_luong': so_luong_sx, 'stock': stock, 'doh': doh, 'ghi_chu': ghi_chu, 'uu_tien': 2, 'loai': 'Forecast'})
         
         conn.close()
         danh_sach_uu_tien.sort(key=lambda x: (x['uu_tien'], x['doh'], -x['so_luong']))
@@ -340,7 +723,7 @@ def hien_thi_ke_hoach(ke_hoach, ngay):
     st.dataframe(df_display, hide_index=False, width='stretch', height=600)
     
     st.markdown("---")
-    if st.button("💾 Lưu Kế hoạch vào Database", type="primary", use_container_width=True):
+    if st.button("💾 Lưu Kế hoạch vào Database", type="primary", width="stretch"):
         luu_ke_hoach(ke_hoach, ngay)
     
     if 'debug' in ke_hoach:

@@ -14,6 +14,37 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 import streamlit_antd_components as sac
 
+# JavaScript để lưu và khôi phục vị trí cuộn
+def inject_scroll_preservation():
+    """Inject JavaScript to preserve scroll position across reruns"""
+    st.markdown("""
+        <script>
+            // Khôi phục vị trí cuộn khi trang load
+            (function() {
+                const savedScroll = localStorage.getItem('streamlit_scroll_pos');
+                if (savedScroll) {
+                    setTimeout(function() {
+                        window.scrollTo(0, parseInt(savedScroll));
+                        localStorage.removeItem('streamlit_scroll_pos');
+                    }, 100);
+                }
+            })();
+            
+            // Lưu vị trí cuộn trước khi rerun (gọi bởi Streamlit component events)
+            function saveScrollPosition() {
+                localStorage.setItem('streamlit_scroll_pos', window.scrollY.toString());
+            }
+            
+            // Lắng nghe sự kiện click trên checkbox để lưu scroll
+            document.addEventListener('click', function(e) {
+                if (e.target.type === 'checkbox' || e.target.closest('[data-testid="stCheckbox"]')) {
+                    saveScrollPosition();
+                }
+            });
+        </script>
+    """, unsafe_allow_html=True)
+
+
 def import_data(title='Đọc và hiển thị dữ liệu Excel', file_path='NganhNgheKinhDoanh.xlsx', output_name='NganhNgheKinhDoanh.xlsx', dtype={'Mã ngành': str}, table_name='NganhNgheKinhDoanh', delete_old_data=False, delete_by_ids=None, col_where=None,
                 unique_columns=None, date_columns=None):
     # Hiển thị tiêu đề ứng dụng
@@ -195,6 +226,9 @@ def dataframe_with_selections(
     download=False, num_rows='fix', image_columns=[], joins=None, multi_select=True, select_all=None,
     selected=False, output_columns=None, post_process_func=None, add_select=True, return_all=False, return_selected_rows=False,
     table_edit=None, column_key_edit='ID', allow_select_all=False, custom_columns=None):
+    
+    # Inject JavaScript để lưu vị trí cuộn khi click checkbox
+    inject_scroll_preservation()
 
     results = {
         "df_return_all": None,
@@ -342,7 +376,7 @@ def dataframe_with_selections(
 
             st.checkbox("Chọn tất cả trên trang này", value=all_on_page_selected, key=f"select_all_{key}", on_change=on_select_all_change)
 
-        column_config2 = {"Select": st.column_config.CheckboxColumn(required=True)}
+        column_config2 = {"Select": st.column_config.CheckboxColumn(required=True, width="small")}
         if column_config: column_config2.update(column_config)
 
         df_display = df_with_selections
@@ -357,7 +391,7 @@ def dataframe_with_selections(
         # Sử dụng hash của dataframe làm key để đảm bảo data_editor được làm mới hoàn toàn khi dữ liệu thay đổi
         df_hash = hashlib.md5(pd.util.hash_pandas_object(df_display, index=True).values).hexdigest()
         editor_key = f"editor_{key}_{df_hash}"
-        edited_df = st.data_editor(df_display, key=editor_key, hide_index=True, column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+        edited_df = st.data_editor(df_display, key=editor_key, hide_index=True, column_config=column_config2,
                                    disabled=df.columns, width=width, num_rows=num_rows)
         
 
@@ -392,10 +426,20 @@ def dataframe_with_selections(
             st.markdown("#### Dữ liệu đã chọn")
             selected_ids_str = "_".join(map(str, sorted(list(st.session_state[selection_state_key]))))
             selected_rows_to_edit = selected_rows.drop(columns=['Select'])
-            # Lọc column_config để chỉ áp dụng cho các cột không bị disable
+            # Lọc column_config để chỉ áp dụng cho các cột có trong DataFrame và không bị disable
+            # Cũng loại bỏ DateColumn và DatetimeColumn vì dữ liệu có thể là string gây lỗi type compatibility
             filtered_column_config = None
             if column_config:
-                filtered_column_config = {k: v for k, v in column_config.items() if k not in colums_disable}
+                existing_columns = selected_rows_to_edit.columns.tolist()
+                filtered_column_config = {}
+                for k, v in column_config.items():
+                    if k not in colums_disable and k in existing_columns:
+                        # Loại bỏ DateColumn và DatetimeColumn để tránh lỗi type compatibility
+                        col_type_str = str(type(v))
+                        if 'DateColumn' not in col_type_str and 'DatetimeColumn' not in col_type_str:
+                            filtered_column_config[k] = v
+                if not filtered_column_config:
+                    filtered_column_config = None
 
             edited_selection = st.data_editor(selected_rows_to_edit, key=f"editor_{key}_selected_{selected_ids_str}", hide_index=True, disabled=colums_disable,
                                               width=width, num_rows='fix', column_config=filtered_column_config)
@@ -541,7 +585,7 @@ def selectable_dataframe(df, table_name=None, multi_select=True, key=None, colum
     df_to_show.insert(0, 'Select', df_to_show.index.isin(st.session_state[selection_state_key]))
 
     # Prepare column configuration
-    final_column_config = {"Select": st.column_config.CheckboxColumn(required=True)}
+    final_column_config = {"Select": st.column_config.CheckboxColumn(required=True, width="small")}
     if column_config:
         final_column_config.update(column_config)
 
@@ -796,7 +840,7 @@ def dataframe_with_selections_df(
                 st.session_state[selection_state_key].difference_update(ids_on_page)
                 st.rerun()
 
-        column_config2 = {"Select": st.column_config.CheckboxColumn(required=True)}
+        column_config2 = {"Select": st.column_config.CheckboxColumn(required=True, width="small")}
         if column_config: column_config2.update(column_config)
 
         df_display = df_with_selections
@@ -1077,7 +1121,7 @@ def product_selection_grid(df_products, key_prefix):
                     if not img_path or not os.path.exists(img_path):
                         img_path = NO_IMAGE_PATH
                     
-                    image_select(label= f'{product['Tên sản phẩm']}', images=[img_path], use_container_width=True)
+                    image_select(label= f'{product['Tên sản phẩm']}', images=[img_path], width="stretch")
 
                     c1, c2 = st.columns([1, 1])
                     so_luong = c1.number_input(label='Số lượng', min_value=0.0, step=1.0, label_visibility="collapsed", format="%.1f", key=f"qty_{product['Mã sản phẩm']}")

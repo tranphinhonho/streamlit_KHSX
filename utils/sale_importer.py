@@ -23,9 +23,6 @@ class SaleImporter:
     COL_SO_LUONG_BAO = 10 # Cột K - Số lượng bao
     COL_SO_LUONG_KG = 12  # Cột M - Số lượng kg
     
-    # Kích cỡ bao cần loại bỏ
-    EXCLUDED_BAG_SIZE = 10
-    
     # Start row (0-indexed, data starts from row 3 in Excel = row 2 in pandas)
     START_ROW = 2
     
@@ -54,6 +51,37 @@ class SaleImporter:
         day_sheets = [s for s in xl.sheet_names if s.isdigit()]
         return sorted(day_sheets, key=lambda x: int(x))
     
+    def get_excel_total(
+        self, 
+        file_path: str | Path = None, 
+        sheet_name: str = "1"
+    ) -> Optional[float]:
+        """
+        Lấy giá trị tổng sản lượng từ ô M4 trong Excel
+        
+        Args:
+            file_path: Đường dẫn file Excel
+            sheet_name: Tên sheet (ngày)
+            
+        Returns:
+            Giá trị tổng từ ô M4 hoặc None nếu không có
+        """
+        if file_path is None:
+            file_path = self.DEFAULT_FILE
+        
+        try:
+            df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+            # Ô M4 = row index 3, column index 12
+            value = df.iloc[3, 12]
+            if pd.notna(value):
+                # Xử lý trường hợp Date format
+                if hasattr(value, 'toordinal'):
+                    return float((value - pd.Timestamp('1899-12-31')).days)
+                return float(value)
+            return None
+        except Exception:
+            return None
+    
     def preview_data(
         self, 
         file_path: str | Path = None, 
@@ -79,7 +107,8 @@ class SaleImporter:
             return pd.DataFrame()
         
         data = []
-        for idx in range(self.START_ROW, min(len(df), self.START_ROW + limit * 2)):
+        end_row = len(df) if limit is None else min(len(df), self.START_ROW + limit * 2)
+        for idx in range(self.START_ROW, end_row):
             row = df.iloc[idx]
             
             ten_cam = row[self.COL_TEN_CAM]
@@ -94,27 +123,46 @@ class SaleImporter:
             # Xử lý kích cỡ bao - convert to numeric
             try:
                 kich_co_bao_num = float(kich_co_bao)
-                # Bỏ qua kích cỡ bao = 10
-                if kich_co_bao_num == self.EXCLUDED_BAG_SIZE:
-                    continue
             except (ValueError, TypeError):
                 # Nếu là text (như "Silo"), giữ nguyên nhưng đặt thành text
                 kich_co_bao_num = None
             
-            # Xử lý số lượng bao
+            # Xử lý số lượng bao - có thể bị định dạng Date trong Excel
             try:
-                so_luong_bao_num = int(so_luong_bao) if pd.notna(so_luong_bao) else 0
+                if pd.notna(so_luong_bao):
+                    if hasattr(so_luong_bao, 'toordinal'):
+                        so_luong_bao_num = int((so_luong_bao - pd.Timestamp('1899-12-31')).days)
+                    elif isinstance(so_luong_bao, (int, float)):
+                        so_luong_bao_num = int(so_luong_bao)
+                    else:
+                        so_luong_bao_num = int(float(str(so_luong_bao)))
+                else:
+                    so_luong_bao_num = 0
             except (ValueError, TypeError):
                 so_luong_bao_num = 0
+            
+            # Xử lý số lượng kg - có thể bị định dạng Date trong Excel
+            try:
+                if pd.notna(so_luong_kg):
+                    if hasattr(so_luong_kg, 'toordinal'):
+                        so_luong_kg_val = float((so_luong_kg - pd.Timestamp('1899-12-31')).days)
+                    elif isinstance(so_luong_kg, (int, float)):
+                        so_luong_kg_val = float(so_luong_kg)
+                    else:
+                        so_luong_kg_val = float(str(so_luong_kg))
+                else:
+                    so_luong_kg_val = 0
+            except (ValueError, TypeError):
+                so_luong_kg_val = 0
                 
             data.append({
                 'Tên cám': str(ten_cam).strip(),
                 'Kích cỡ bao (kg)': kich_co_bao_num if kich_co_bao_num else str(kich_co_bao),
                 'Số lượng bao': so_luong_bao_num,
-                'Số lượng (kg)': so_luong_kg
+                'Số lượng (kg)': so_luong_kg_val
             })
             
-            if len(data) >= limit:
+            if limit is not None and len(data) >= limit:
                 break
         
         return pd.DataFrame(data)
@@ -149,19 +197,35 @@ class SaleImporter:
             if pd.isna(ten_cam) or pd.isna(so_luong_kg):
                 continue
             
-            # Bỏ qua kích cỡ bao = 10
-            try:
-                if float(kich_co_bao) == self.EXCLUDED_BAG_SIZE:
-                    continue
-            except (ValueError, TypeError):
-                pass
+
             
-            # Parse số lượng
+            # Parse số lượng kg - xử lý trường hợp Date format
             try:
-                so_luong_kg_val = float(so_luong_kg) if pd.notna(so_luong_kg) else 0
-                so_luong_bao_val = int(so_luong_bao) if pd.notna(so_luong_bao) else 0
+                if pd.notna(so_luong_kg):
+                    if hasattr(so_luong_kg, 'toordinal'):
+                        so_luong_kg_val = float((so_luong_kg - pd.Timestamp('1899-12-31')).days)
+                    elif isinstance(so_luong_kg, (int, float)):
+                        so_luong_kg_val = float(so_luong_kg)
+                    else:
+                        so_luong_kg_val = float(str(so_luong_kg))
+                else:
+                    so_luong_kg_val = 0
             except (ValueError, TypeError):
                 continue
+            
+            # Parse số lượng bao - xử lý trường hợp Date format
+            try:
+                if pd.notna(so_luong_bao):
+                    if hasattr(so_luong_bao, 'toordinal'):
+                        so_luong_bao_val = int((so_luong_bao - pd.Timestamp('1899-12-31')).days)
+                    elif isinstance(so_luong_bao, (int, float)):
+                        so_luong_bao_val = int(so_luong_bao)
+                    else:
+                        so_luong_bao_val = int(float(str(so_luong_bao)))
+                else:
+                    so_luong_bao_val = 0
+            except (ValueError, TypeError):
+                so_luong_bao_val = 0
             
             if so_luong_kg_val <= 0:
                 continue
@@ -183,11 +247,11 @@ class SaleImporter:
         return list(aggregated.values())
     
     def _get_product_id(self, cursor, ten_cam: str) -> Optional[int]:
-        """Tìm ID sản phẩm từ Tên cám"""
+        """Tìm ID sản phẩm từ Tên cám (case-insensitive)"""
         cursor.execute("""
             SELECT ID 
             FROM SanPham 
-            WHERE TRIM([Tên cám]) = ? AND [Đã xóa] = 0
+            WHERE UPPER(TRIM([Tên cám])) = UPPER(?) AND [Đã xóa] = 0
         """, (ten_cam,))
         result = cursor.fetchone()
         return result[0] if result else None

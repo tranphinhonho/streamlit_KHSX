@@ -5,10 +5,19 @@ Lọc email từ dinhnguyen@cp.com.vn với file đính kèm FFSTOCK
 
 from __future__ import annotations
 import os
+import sys
+import io
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import re
+
+# Fix encoding cho Windows console (cp1252 không hỗ trợ emoji/tiếng Việt)
+if hasattr(sys.stdout, 'buffer'):
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+    except Exception:
+        pass
 
 try:
     import win32com.client as win32
@@ -42,6 +51,23 @@ class EmailReceiver:
         "phinho@cp.com.vn"
     ]
     
+    # Sender cho PELLET (vận hành cám viên PL1-PL7)
+    # Thêm tất cả email có khả năng gửi file pellet
+    SENDER_PELLET = [
+        "phinho@cp.com.vn",
+        "mixer2@cp.com.vn",
+        "nguyentram@cp.com.vn",
+        "tanhoc@cp.com.vn",
+        "hobao@cp.com.vn",
+        "vanngoc@cp.com.vn",
+        "phuong.van@cp.com.vn",
+        "hoanghuu@cp.com.vn",
+        "vanphuong@cp.com.vn",   # Pham Van Phuong
+        "phamvanphuong@cp.com.vn",  # Pham Van Phuong (alternative)
+        "ngocbao@cp.com.vn",    # Ho Ngoc Bao
+        "hongocbao@cp.com.vn"   # Ho Ngoc Bao (alternative)
+    ]
+    
     # Thư mục lưu file download
     DOWNLOAD_FOLDER = Path("D:/PYTHON/B7KHSX/downloads")
     
@@ -54,7 +80,11 @@ class EmailReceiver:
         'PRODUCTION': r'^pro.*\.csv$',
         # Match file báo cáo tồn bồn - cả có dấu và không dấu
         # Ví dụ: "Báo cáo tồn bồn thành phẩm 01.2026.xlsx" hoặc "Bao cao ton bon thanh pham 01.2026.xlsx"
-        'TONBON': r'[Bb][áa]o c[áa]o t[ồo]n b[ồo]n.*\.xlsx?$'
+        'TONBON': r'[Bb][áa]o c[áa]o t[ồo]n b[ồo]n.*\.xlsx?$',
+        # Match file vận hành cám viên: PLx M.YYYY.xlsx hoặc PLx MM.YYYY.xlsx
+        # Ví dụ: "PL1 1.2026.xlsx", "PL7 12.2025.xlsx", "PL3 1.2026.xlsx"
+        # Dùng [.] thay vì \. để tránh escape issues
+        'PELLET': r'PL[1-7] [0-9]{1,2}[.][0-9]{4}[.](xlsx|xlsm)'
     }
     
     def __init__(self, download_folder: Optional[Path] = None):
@@ -84,12 +114,17 @@ class EmailReceiver:
             True nếu kết nối thành công
         """
         try:
+            import pythoncom
+            pythoncom.CoInitialize()
             self.outlook = win32.Dispatch("Outlook.Application")
             self.namespace = self.outlook.GetNamespace("MAPI")
             self.inbox = self.namespace.GetDefaultFolder(6)  # 6 = olFolderInbox
             return True
         except Exception as e:
-            print(f"Lỗi kết nối Outlook: {e}")
+            try:
+                print(f"Loi ket noi Outlook: {e}")
+            except UnicodeEncodeError:
+                print(f"Loi ket noi Outlook: {e!r}")
             return False
     
     def _find_folder_by_name(self, parent_folder, folder_name: str):
@@ -235,12 +270,13 @@ class EmailReceiver:
     ) -> List[Dict]:
         """Tìm email trong một folder cụ thể"""
         results = []
+        max_results = 10  # Giới hạn tối đa 10 email để tăng tốc
         
         try:
             items = folder.Items
             items.Sort("[ReceivedTime]", True)  # Mới nhất trước
             
-            for i in range(min(100, items.Count)):
+            for i in range(min(50, items.Count)):  # Quét tối đa 50 email
                 try:
                     item = items.Item(i + 1)
                     
@@ -306,6 +342,10 @@ class EmailReceiver:
                             '_item': item  # Reference để download sau
                         })
                         
+                        # Dừng sớm nếu đã đủ số lượng
+                        if len(results) >= max_results:
+                            return results
+                        
                 except Exception as e:
                     print(f"Lỗi đọc email {i+1}: {e}")
                     continue
@@ -343,7 +383,9 @@ class EmailReceiver:
             items = sent_folder.Items
             items.Sort("[SentOn]", True)  # Mới nhất trước
             
-            for i in range(min(100, items.Count)):
+            max_results = 10  # Giới hạn tối đa 10 email
+            
+            for i in range(min(50, items.Count)):  # Quét tối đa 50 email
                 try:
                     item = items.Item(i + 1)
                     
@@ -389,6 +431,10 @@ class EmailReceiver:
                             'bag_files': [],
                             '_item': item
                         })
+                        
+                        # Dừng sớm nếu đã đủ số lượng
+                        if len(results) >= max_results:
+                            break
                         
                 except Exception as e:
                     print(f"Lỗi đọc email sent {i+1}: {e}")
@@ -567,6 +613,157 @@ class EmailReceiver:
         
         return results
     
+    def get_pellet_emails(
+        self, 
+        days_back: int = 30,
+        folder_name: str = "Pellet"
+    ) -> List[Dict]:
+        """
+        Lấy danh sách email có file vận hành cám viên (PL1-PL7) từ folder "Pellet"
+        File có pattern: PLx M.YYYY.xlsx hoặc PLx MM.YYYY.xlsx
+        
+        Args:
+            days_back: Số ngày lùi lại để tìm email (mặc định 30 ngày vì file theo tháng)
+            folder_name: Tên folder (mặc định: Pellet)
+            
+        Returns:
+            List các dict chứa thông tin email và attachments
+        """
+        if not self.outlook:
+            if not self.connect():
+                return []
+        
+        results = []
+        cutoff_date = datetime.now() - timedelta(days=days_back)
+        target_folder = None
+        
+        try:
+            # Bước 1: Tìm folder "Pellet" trong Favorites trước
+            print(f"🔍 Tìm nhanh folder '{folder_name}' trong Favorites...")
+            
+            try:
+                for account in self.namespace.Folders:
+                    try:
+                        for folder in account.Folders:
+                            if folder.Name.lower() == folder_name.lower():
+                                target_folder = folder
+                                print(f"✅ Tìm thấy '{folder_name}' trực tiếp!")
+                                break
+                        if target_folder:
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                print(f"⚠️ Không tìm được trong Favorites: {e}")
+            
+            # Bước 2: Nếu không tìm thấy, tìm trong mailbox
+            if not target_folder:
+                print(f"🔄 Tìm trong mailbox...")
+                
+                for account in self.namespace.Folders:
+                    account_name = account.Name.lower()
+                    
+                    if "archive" not in account_name:
+                        try:
+                            for folder in account.Folders:
+                                if folder.Name.lower() == folder_name.lower():
+                                    target_folder = folder
+                                    print(f"✅ Tìm thấy ở cấp 1: {folder.Name}")
+                                    break
+                                
+                                try:
+                                    for subfolder in folder.Folders:
+                                        if subfolder.Name.lower() == folder_name.lower():
+                                            target_folder = subfolder
+                                            print(f"✅ Tìm thấy trong {folder.Name}/{folder_name}")
+                                            break
+                                    if target_folder:
+                                        break
+                                except:
+                                    continue
+                                    
+                            if target_folder:
+                                break
+                        except:
+                            continue
+            
+            if not target_folder:
+                print(f"❌ Không tìm thấy folder '{folder_name}'")
+                return results
+            
+            print(f"📂 Đang đọc email từ folder: {target_folder.Name}")
+            
+            items = target_folder.Items
+            items.Sort("[ReceivedTime]", True)
+            
+            for i in range(min(100, items.Count)):
+                try:
+                    item = items.Item(i + 1)
+                    
+                    received_time = item.ReceivedTime
+                    if hasattr(received_time, 'year'):
+                        try:
+                            received_naive = datetime(
+                                received_time.year, received_time.month, received_time.day,
+                                received_time.hour, received_time.minute, received_time.second
+                            )
+                            if received_naive < cutoff_date:
+                                continue
+                        except:
+                            pass
+                    
+                    # Không filter sender vì đã trong folder Pellet (được lọc sẵn)
+                    # Lấy thông tin sender để hiển thị
+                    try:
+                        sender_email = item.SenderEmailAddress.lower() if item.SenderEmailAddress else ""
+                    except:
+                        sender_email = ""
+                    
+                    pellet_files = []
+                    
+                    if item.Attachments.Count > 0:
+                        for j in range(1, item.Attachments.Count + 1):
+                            att = item.Attachments.Item(j)
+                            filename = att.FileName
+                            
+                            if self._match_file_pattern(filename, 'PELLET'):
+                                pellet_files.append({
+                                    'filename': filename,
+                                    'size': att.Size,
+                                    'index': j
+                                })
+                    
+                    if pellet_files:
+                        try:
+                            received_time_str = datetime(
+                                received_time.year, received_time.month, received_time.day,
+                                received_time.hour, received_time.minute, received_time.second
+                            ).strftime('%Y-%m-%d %H:%M:%S')
+                        except:
+                            received_time_str = str(received_time)
+                        
+                        results.append({
+                            'subject': item.Subject,
+                            'sender': item.SenderName,
+                            'sender_email': sender_email,
+                            'received_time': received_time_str,
+                            'unread': item.UnRead,
+                            'entry_id': item.EntryID,
+                            'pellet_files': pellet_files,
+                            '_item': item
+                        })
+                        
+                except Exception as e:
+                    print(f"Lỗi đọc email pellet {i+1}: {e}")
+                    continue
+            
+            print(f"✅ Tìm thấy {len(results)} email có file vận hành cám viên")
+                    
+        except Exception as e:
+            print(f"Lỗi lấy email pellet: {e}")
+        
+        return results
+    
     def download_attachment(
         self, 
         email_info: Dict, 
@@ -586,16 +783,40 @@ class EmailReceiver:
         """
         try:
             item = email_info.get('_item')
-            if not item:
-                print("Không tìm thấy email item")
-                return None
-            
             att_index = file_info.get('index')
+            
             if not att_index:
                 print("Không tìm thấy index attachment")
                 return None
             
-            att = item.Attachments.Item(att_index)
+            # Thử dùng _item trước, nếu lỗi (stale COM object) thì dùng entry_id
+            try:
+                if item:
+                    att = item.Attachments.Item(att_index)
+                else:
+                    raise Exception("No _item reference")
+            except Exception as e:
+                print(f"⚠️ _item stale, thử dùng entry_id: {e}")
+                
+                # Fallback: dùng entry_id để lấy lại email
+                entry_id = email_info.get('entry_id')
+                if not entry_id:
+                    print("❌ Không có entry_id để fallback")
+                    return None
+                
+                # Kết nối lại nếu cần
+                if not self.namespace:
+                    if not self.connect():
+                        print("❌ Không thể kết nối Outlook")
+                        return None
+                
+                try:
+                    item = self.namespace.GetItemFromID(entry_id)
+                    att = item.Attachments.Item(att_index)
+                    print(f"✅ Lấy lại email thành công qua entry_id")
+                except Exception as e2:
+                    print(f"❌ Không thể lấy email qua entry_id: {e2}")
+                    return None
             
             # Xác định thư mục lưu
             save_folder = self.download_folder

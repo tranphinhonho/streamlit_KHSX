@@ -2,6 +2,7 @@ import streamlit as st
 from admin.sys_kde_components import *
 import plotly.express as px
 import plotly.graph_objects as go
+from utils.import_notification import send_import_notification
 
 # Mapping vật nuôi
 VAT_NUOI_LABELS = {
@@ -31,12 +32,30 @@ def get_stock_by_vatnuoi(filter_date=None):
     df = ss.query_database_sqlite(sql_string=sql, data_type='dataframe')
     return df
 
+def get_latest_stock_date():
+    """Lấy ngày stock old gần nhất có dữ liệu"""
+    sql = """
+        SELECT MAX([Ngày stock old]) as NgayMoiNhat
+        FROM StockOld
+        WHERE [Đã xóa] = 0
+    """
+    result = ss.query_database_sqlite(sql_string=sql, data_type='list')
+    if result and result[0]:
+        return result[0]
+    return None
+
 def app(selected):
     
-    # Xác định ngày filter
-    filter_date = None
-    if 'filter_date' in st.session_state and st.session_state.filter_date:
-        filter_date = st.session_state.filter_date
+    # Lấy ngày gần nhất có dữ liệu
+    latest_date = get_latest_stock_date()
+    
+    # Xác định ngày filter - mặc định là ngày gần nhất
+    if 'filter_date' not in st.session_state or not st.session_state.filter_date:
+        # Tự động set ngày gần nhất
+        if latest_date:
+            st.session_state.filter_date = latest_date
+    
+    filter_date = st.session_state.get('filter_date', latest_date)
     
     # Hiển thị thông báo và biểu đồ trên cùng 1 dòng
     if filter_date:
@@ -103,19 +122,28 @@ def app(selected):
                         showlegend=False
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                 else:
                     st.warning("Không có dữ liệu tồn kho cho ngày này")
     else:
-        # Không có filter - hiển thị biểu đồ tổng
+        # Không có filter - hiển thị biểu đồ theo ngày gần nhất
+        latest_date = get_latest_stock_date()
         col_title, col_chart = st.columns([1, 2])
         
         with col_title:
             st.markdown("##### 📊 Biểu đồ tồn kho theo Vật nuôi")
-            st.markdown("*(Tổng hợp tất cả các ngày)*")
+            if latest_date:
+                # Format ngày dd/mm/yyyy
+                parts = str(latest_date).split('-')
+                if len(parts) == 3:
+                    st.markdown(f"*(Ngày gần nhất: **{parts[2]}/{parts[1]}/{parts[0]}**)*")
+                else:
+                    st.markdown(f"*(Ngày gần nhất: **{latest_date}**)*")
+            else:
+                st.markdown("*(Chưa có dữ liệu)*")
         
         with col_chart:
-            df_chart = get_stock_by_vatnuoi(None)
+            df_chart = get_stock_by_vatnuoi(latest_date)
             if df_chart is not None and len(df_chart) > 0:
                 # Sắp xếp theo số lượng giảm dần
                 df_chart = df_chart.sort_values('TongKg', ascending=False)
@@ -161,13 +189,11 @@ def app(selected):
                     uniformtext_mode='hide'
                 )
                 
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
     
-    # Tabs: Import Excel và Nhập thủ công
-    tab1, tab2 = st.tabs(["📁 Import Excel", "📝 Nhập thủ công"])
-    
-    with tab1:
-        st.header("Import Stock Old từ Excel")
+    # Expander cho Import Excel (thu gọn)
+    with st.expander("📁 Import Excel", expanded=False):
+        st.subheader("Import Stock Old từ Excel")
         
         st.markdown("""
         **Yêu cầu file Excel:**
@@ -192,7 +218,7 @@ def app(selected):
                 
                 # Hiển thị preview
                 with st.expander("👁️ Xem trước dữ liệu (10 dòng đầu)"):
-                    st.dataframe(df_excel.head(10), use_container_width=True)
+                    st.dataframe(df_excel.head(10), width="stretch")
                 
                 # Mapping columns
                 st.subheader("Cấu hình cột dữ liệu")
@@ -337,6 +363,17 @@ def app(selected):
                                 st.text(f"- {code}")
                             if len(not_found) > 20:
                                 st.text(f"... và {len(not_found) - 20} mã khác")
+                        
+                        # Gửi email thông báo
+                        email_sent = send_import_notification(
+                            not_found_codes=not_found,
+                            filename=uploaded_file.name,
+                            import_type='STOCK',
+                            ngay_import=ngay_stock_old,
+                            nguoi_import=st.session_state.username
+                        )
+                        if email_sent:
+                            st.info(f"📧 Đã gửi email thông báo về {len(not_found)} mã SP chưa có dữ liệu tới phinho@cp.com.vn")
                     
                     st.balloons()
                     st.rerun()
@@ -347,8 +384,9 @@ def app(selected):
                 with st.expander("Chi tiết lỗi"):
                     st.code(traceback.format_exc())
     
-    with tab2:
-        st.header("1. Stock Old")
+    # Expander cho Nhập thủ công (thu gọn)
+    with st.expander("📝 Nhập thủ công", expanded=False):
+        st.subheader("Nhập Stock Old thủ công")
         # Code cám	Tên cám	Kích cỡ ép viên	Dạng ép viên	Kích cỡ đóng bao	Pellet	Packing	Batch size
         
         ds_sanpham = ss.get_columns_data(table_name='SanPham',
@@ -409,16 +447,44 @@ def app(selected):
     filter_cols = st.columns(7)
     with filter_cols[0]:
         btn_style = "primary" if st.session_state.filter_vatnuoi_stockold is None else "secondary"
-        if st.button("📦 Tất cả", use_container_width=True, type=btn_style, key="stockold_filter_all"):
+        if st.button("📦 Tất cả", width="stretch", type=btn_style, key="stockold_filter_all"):
             st.session_state.filter_vatnuoi_stockold = None
             st.rerun()
     
     for idx, (code, label) in enumerate(VAT_NUOI_LABELS.items()):
         with filter_cols[idx + 1]:
             btn_style = "primary" if st.session_state.filter_vatnuoi_stockold == code else "secondary"
-            if st.button(label, use_container_width=True, type=btn_style, key=f"stockold_filter_{code}"):
+            if st.button(label, width="stretch", type=btn_style, key=f"stockold_filter_{code}"):
                 st.session_state.filter_vatnuoi_stockold = code
                 st.rerun()
+    
+    # Filter theo ngày
+    col_date, col_search = st.columns([1, 3])
+    with col_date:
+        # Lấy ngày mặc định từ filter_date nếu có
+        default_date = None
+        if filter_date:
+            parts = filter_date.split('-')
+            if len(parts) == 3:
+                from datetime import date as dt_date
+                default_date = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
+        
+        selected_date = st.date_input(
+            "Lọc theo ngày",
+            value=default_date,
+            format="YYYY/MM/DD",
+            key="stockold_date_filter"
+        )
+        
+        # Kiểm tra nếu ngày thay đổi
+        new_date_str = selected_date.strftime('%Y-%m-%d') if selected_date else None
+        current_filter = st.session_state.get('filter_date')
+        
+        if new_date_str != current_filter:
+            st.session_state.filter_date = new_date_str
+            st.session_state.page_size = 'All'
+            st.session_state.df_key += 1  # Buộc refresh dataframe
+            st.rerun()
     
     # Xây dựng điều kiện lọc
     col_where = {'Đã xóa': ('=', 0)}

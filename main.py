@@ -67,9 +67,31 @@ if "df_key" not in st.session_state:
 if authentication_status:
     hide_header_streamlit()
     
-    # Custom CSS for larger, bolder, colorful tables
+    # Custom CSS for larger, bolder, colorful tables + narrow sidebar
     st.markdown("""
     <style>
+    /* Thu nhỏ sidebar để bảng dữ liệu rộng hơn */
+    [data-testid="stSidebar"] {
+        min-width: 220px !important;
+        max-width: 220px !important;
+        width: 220px !important;
+    }
+    
+    [data-testid="stSidebar"] > div:first-child {
+        width: 220px !important;
+        padding: 10px !important;
+    }
+    
+    /* Thu nhỏ font trong sidebar menu */
+    [data-testid="stSidebar"] .nav-link {
+        font-size: 13px !important;
+        padding: 8px 10px !important;
+    }
+    
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        font-size: 14px !important;
+    }
+    
     /* Tăng kích thước chữ trong bảng dữ liệu - 200% */
     div[data-testid="stDataFrame"] table {
         font-size: 1.1rem !important;

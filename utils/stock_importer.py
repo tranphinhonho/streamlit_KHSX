@@ -157,27 +157,62 @@ class StockImporter:
             """, (ngay_email,))
             
             deleted_count = cursor.rowcount
-            print(f"🗑️ Đã xóa mềm {deleted_count} record StockOld cũ (ngày {ngay_email})")
+            print(f"[DEL] Da xoa mem {deleted_count} record StockOld cu (ngay {ngay_email})")
             
             # Xóa log import cũ
             cursor.execute("""
                 DELETE FROM EmailImportLog WHERE TenFile = ?
             """, (filename,))
-            print(f"🗑️ Đã xóa log import cũ: {filename}")
+            print(f"[DEL] Da xoa log import cu: {filename}")
         
         conn.commit()
         conn.close()
     
-    def _get_product_id(self, cursor, code_cam: str) -> Optional[int]:
-        """Tìm ID sản phẩm từ Code cám"""
-        cursor.execute("""
-            SELECT ID 
-            FROM SanPham 
-            WHERE TRIM([Code cám]) = ? AND [Đã xóa] = 0
-        """, (code_cam.strip(),))
+    def _get_product_id(self, cursor, code_cam: str, ten_cam: str = None) -> Optional[int]:
+        """Tìm ID sản phẩm từ Code cám và Tên cám
         
-        result = cursor.fetchone()
-        return result[0] if result else None
+        Ưu tiên tìm kiếm:
+        1. Khớp chính xác cả Code cám VÀ Tên cám (cho trường hợp nhiều SP cùng Code)
+        2. Khớp theo Code cám
+        3. Khớp theo Tên cám
+        """
+        code = code_cam.strip() if code_cam else ""
+        ten = ten_cam.strip() if ten_cam else ""
+        
+        # 1. Thử tìm theo cả Code cám VÀ Tên cám (ưu tiên cao nhất)
+        if code and ten:
+            cursor.execute("""
+                SELECT ID 
+                FROM SanPham 
+                WHERE TRIM([Code cám]) = ? AND UPPER(TRIM([Tên cám])) = UPPER(?) AND [Đã xóa] = 0
+            """, (code, ten))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+        
+        # 2. Thử tìm theo Tên cám trước (vì nhiều SP có thể cùng Code)
+        if ten:
+            cursor.execute("""
+                SELECT ID 
+                FROM SanPham 
+                WHERE UPPER(TRIM([Tên cám])) = UPPER(?) AND [Đã xóa] = 0
+            """, (ten,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+        
+        # 3. Fallback: Tìm theo Code cám
+        if code:
+            cursor.execute("""
+                SELECT ID 
+                FROM SanPham 
+                WHERE TRIM([Code cám]) = ? AND [Đã xóa] = 0
+            """, (code,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+        
+        return None
     
     def _add_missing_product(
         self, 
@@ -235,6 +270,78 @@ class StockImporter:
         s = s.replace(" ", "").replace("P", "").replace("p", "")
         return s
     
+    def preview_data(
+        self, 
+        file_path: str | Path,
+        limit: int = 20
+    ) -> Optional[pd.DataFrame]:
+        """
+        Preview dữ liệu trong file FFSTOCK trước khi import
+        
+        Args:
+            file_path: Đường dẫn file Excel
+            limit: Số dòng tối đa hiển thị
+            
+        Returns:
+            DataFrame preview hoặc None nếu lỗi
+        """
+        file_path = Path(file_path)
+        
+        try:
+            all_data = []
+            
+            # Đọc sheet BRAN
+            try:
+                df_bran = pd.read_excel(
+                    file_path, 
+                    sheet_name=self.SHEET_BRAN,
+                    header=None,
+                    skiprows=self.START_ROW_BRAN
+                )
+                data_bran = self._parse_sheet(df_bran, self.SHEET_BRAN)
+                all_data.extend(data_bran)
+            except:
+                pass
+            
+            # Đọc sheet INTGRATE
+            try:
+                df_int = pd.read_excel(
+                    file_path,
+                    sheet_name=self.SHEET_INTGRATE,
+                    header=None,
+                    skiprows=self.START_ROW_INTGRATE
+                )
+                data_int = self._parse_sheet(df_int, self.SHEET_INTGRATE)
+                all_data.extend(data_int)
+            except:
+                pass
+            
+            if not all_data:
+                return None
+            
+            # Tạo DataFrame để hiển thị
+            df = pd.DataFrame(all_data[:limit])
+            
+            # Đổi tên cột và chọn cột quan trọng nhất
+            df = df.rename(columns={
+                'code_cam': 'Code',
+                'ten_cam': 'Tên cám',
+                'kich_co_ep': 'Ép viên',
+                'kich_co_bao': 'Bao (kg)',
+                'ton_kho_kg': 'Tồn (kg)',
+                'day_on_hand': 'DOH'
+            })
+            
+            # Chỉ giữ các cột quan trọng và sắp xếp thứ tự
+            columns_order = ['Tên cám', 'Bao (kg)', 'Tồn (kg)', 'DOH']
+            df = df[[col for col in columns_order if col in df.columns]]
+            
+            return df
+            
+        except Exception as e:
+            print(f"❌ Lỗi preview: {e}")
+            return None
+    
     def _parse_sheet(self, df: pd.DataFrame, sheet_name: str) -> List[Dict]:
         """
         Parse dữ liệu từ một sheet
@@ -271,8 +378,15 @@ class StockImporter:
                 except:
                     ton_kho_kg = 0
                 
-                # Bỏ qua nếu tồn kho = 0
-                if ton_kho_kg == 0:
+                # Lấy tồn kho bao trước để kiểm tra
+                ton_kho_bao = row.iloc[col_map['ton_kho_bao']]
+                try:
+                    ton_kho_bao_check = int(float(ton_kho_bao))
+                except:
+                    ton_kho_bao_check = 0
+                
+                # Bỏ qua nếu cả tồn kho kg và bao đều = 0
+                if ton_kho_kg == 0 and ton_kho_bao_check == 0:
                     continue
                 
                 # Lấy các thông tin khác
@@ -281,8 +395,9 @@ class StockImporter:
                     continue
                 code_cam = str(code_cam).strip()
                 
-                ten_cam = row.iloc[col_map['ten_cam']]
-                ten_cam = str(ten_cam).strip() if not pd.isna(ten_cam) else ""
+                # Lấy tên cám trước để kiểm tra điều kiện loại bỏ
+                ten_cam_raw = row.iloc[col_map['ten_cam']]
+                ten_cam = str(ten_cam_raw).strip() if not pd.isna(ten_cam_raw) else ""
                 
                 # Loại bỏ sản phẩm có (5*5)
                 if "(5*5)" in ten_cam:
@@ -428,8 +543,12 @@ class StockImporter:
         
         for item in all_data:
             try:
-                # Tìm ID sản phẩm
-                id_sanpham = self._get_product_id(cursor, item['code_cam'])
+                # Tìm ID sản phẩm - truyền cả code_cam và ten_cam
+                id_sanpham = self._get_product_id(cursor, item['code_cam'], item['ten_cam'])
+                
+                # Debug log cho VT products
+                if 'VT' in str(item['ten_cam']).upper():
+                    print(f"[VT] code={item['code_cam']}, ten={item['ten_cam']}, id={id_sanpham}, kg={item['ton_kho_kg']}")
                 
                 if not id_sanpham:
                     # Nếu bật auto_add_missing, tự động thêm sản phẩm

@@ -1,41 +1,21 @@
 import json
-import sqlite3
 import pandas as pd
 import bcrypt
 import numpy as np
 import admin.sys_functions as fn
 import os
 from datetime import datetime
+import admin.sys_database as db
 
-# Lấy đường dẫn tuyệt đối đến thư mục chứa script hiện tại
-script_dir = os.path.dirname(os.path.abspath(__file__))
-config_path = os.path.join(script_dir, "config.json")
-
-with open(config_path, 'r', encoding='utf-8') as file:
-    data = json.load(file)
-
-# Lấy đường dẫn database
-database_path = data.get('database_path', 'database.db')
-if not os.path.isabs(database_path):
-    # Nếu là đường dẫn tương đối, tính từ thư mục admin
-    database_path = os.path.join(script_dir, database_path)
+# Re-export các hằng số và hàm từ sys_database
+IS_POSTGRES = db.IS_POSTGRES
+database_path = db.database_path
 
 def connect_db():
     """
-    Kết nối đến SQLite database.
+    Kết nối database (SQLite hoặc PostgreSQL, tự động chọn).
     """
-    try:
-        conn = sqlite3.connect(database_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row  # Cho phép truy cập cột theo tên
-        return conn
-    except Exception as e:
-        error_message = (
-            f"Không thể kết nối đến SQLite database tại {database_path}. Lỗi: {e}\n"
-            "Vui lòng đảm bảo rằng:\n"
-            "1. Đường dẫn database trong file config.json là chính xác.\n"
-            "2. Bạn có quyền đọc/ghi vào thư mục chứa database."
-        )
-        raise ConnectionError(error_message)
+    return db.connect_db()
 
 def generate_next_code(tablename, column_name, prefix='PT', num_char=5):
     """
@@ -44,6 +24,7 @@ def generate_next_code(tablename, column_name, prefix='PT', num_char=5):
     """
     try:
         # Lấy số lớn nhất hiện tại
+        qi = db.quote_identifier
         sql = f"""
         SELECT MAX(
             CAST(
@@ -180,7 +161,7 @@ def get_id_by_name(tablename, column_name, value_name, col_id='ID'):
 
 def query_database_sqlite(sql_string, data_type=None, delimiter=' | ', params=None):
     """
-    Thực thi truy vấn SQLite.
+    Thực thi truy vấn (SQLite hoặc PostgreSQL).
     data_type: 'dataframe', 'list', 'value', hoặc None (cho INSERT/UPDATE/DELETE)
     """
     conn = None
@@ -188,11 +169,15 @@ def query_database_sqlite(sql_string, data_type=None, delimiter=' | ', params=No
     try:
         conn = connect_db()
         cursor = conn.cursor()
+        
+        # Adapt SQL cho PostgreSQL
+        adapted_sql = db.adapt_sql(sql_string)
+        adapted_sql = db.adapt_placeholder(adapted_sql)
 
         if params:
-            cursor.execute(sql_string, params)
+            cursor.execute(adapted_sql, params)
         else:
-            cursor.execute(sql_string)
+            cursor.execute(adapted_sql)
         
         if data_type is not None:
             # Lấy kết quả truy vấn
@@ -200,11 +185,17 @@ def query_database_sqlite(sql_string, data_type=None, delimiter=' | ', params=No
 
             if data_type == 'dataframe':
                 rows = cursor.fetchall()
-                df = pd.DataFrame([dict(row) for row in rows])
+                if IS_POSTGRES:
+                    df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+                else:
+                    df = pd.DataFrame([dict(row) for row in rows])
                 return df
             elif data_type == 'list':
                 rows = cursor.fetchall()
-                result = [delimiter.join(str(row[col]) for col in columns) for row in rows]
+                if IS_POSTGRES:
+                    result = [delimiter.join(str(val) for val in row) for row in rows]
+                else:
+                    result = [delimiter.join(str(row[col]) for col in columns) for row in rows]
                 return result
             elif data_type == 'value':
                 result = cursor.fetchone()
@@ -227,7 +218,7 @@ def query_database_sqlite(sql_string, data_type=None, delimiter=' | ', params=No
 
 def get_all_tables():
     """Lấy danh sách tất cả các bảng (không bao gồm bảng hệ thống)"""
-    sql_string = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'tbsys_%' AND name NOT LIKE 'sqlite_%'"
+    sql_string = db.get_table_list_sql(include_system=False)
     conn = connect_db()
     cursor = conn.cursor()
     cursor.execute(sql_string)
@@ -239,7 +230,7 @@ def get_all_tables():
 
 def get_all_tables_admin():
     """Lấy danh sách tất cả các bảng (bao gồm cả bảng hệ thống)"""
-    sql_string = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    sql_string = db.get_table_list_sql(include_system=True)
     conn = connect_db()
     cursor = conn.cursor()
     cursor.execute(sql_string)
@@ -288,8 +279,7 @@ def get_columns_data(table_name, columns=None, delimiter=" | ", data_type="dataf
         custom_columns = []
 
     # Lấy danh sách kiểu dữ liệu của các cột
-    cursor.execute(f"PRAGMA table_info([{table_name}])")
-    column_info = cursor.fetchall()
+    column_info = db.get_table_info(cursor, table_name)
     column_types = {row[1]: row[2].lower() for row in column_info}
 
     # Helper function for quoting values
@@ -304,19 +294,19 @@ def get_columns_data(table_name, columns=None, delimiter=" | ", data_type="dataf
         return f"'{safe_value}'"
 
     # Xây dựng danh sách cột
+    qi = db.quote_identifier
+    qt = db.quote_table
     working_columns = list(columns) if columns is not None else []
     selected_columns = []
     
     if not working_columns:
         all_table_columns = get_table_columns(table_name)
         if not all_table_columns:
-            selected_columns.append(f"[{table_name}].*")
+            selected_columns.append(f"{qt(table_name)}.*")
         else:
-            # Thêm alias cho từng cột để tránh ambiguous khi JOIN
-            selected_columns += [f"[{table_name}].[{column}] AS [{column}]" for column in all_table_columns]
+            selected_columns += [f"{qt(table_name)}.{qi(column)} AS {qi(column)}" for column in all_table_columns]
     else:
-        # Thêm alias cho từng cột để tránh ambiguous khi JOIN
-        selected_columns += [f"[{table_name}].[{column}] AS [{column}]" for column in working_columns]
+        selected_columns += [f"{qt(table_name)}.{qi(column)} AS {qi(column)}" for column in working_columns]
 
     # Thêm cột custom
     for custom_column in custom_columns:
@@ -336,10 +326,10 @@ def get_columns_data(table_name, columns=None, delimiter=" | ", data_type="dataf
             join_on = join.get("on")
             join_columns = join.get("columns", [])
 
-            selected_columns += [f"[{join_alias}].[{col}] AS [{join_alias}_{col}]" for col in join_columns]
+            selected_columns += [f"{qi(join_alias)}.{qi(col)} AS {qi(join_alias + '_' + col)}" for col in join_columns]
 
             on_conditions = " AND ".join(
-                f"[{from_table}].[{key}] = [{join_alias}].[{value}]" for key, value in join_on.items()
+                f"{qi(from_table)}.{qi(key)} = {qi(join_alias)}.{qi(value)}" for key, value in join_on.items()
             )
 
             join_where = join.get("join_where")
@@ -349,16 +339,16 @@ def get_columns_data(table_name, columns=None, delimiter=" | ", data_type="dataf
                         operator, value = cond
                         column_type = column_types.get(col, "text")
                         value_str = _quote_sql_value(value, column_type)
-                        on_conditions += f" AND [{from_table}].[{col}] {operator} {value_str}"
+                        on_conditions += f" AND {qi(from_table)}.{qi(col)} {operator} {value_str}"
             
-            join_statement = f"LEFT JOIN [{join_table}] AS [{join_alias}] ON {on_conditions}"
+            join_statement = f"LEFT JOIN {qi(join_table)} AS {qi(join_alias)} ON {on_conditions}"
             join_statements.append(join_statement)
 
     # Thêm DISTINCT
     distinct_clause = "DISTINCT" if distinct else ""
 
     # Xây dựng câu truy vấn
-    query = f"SELECT {distinct_clause} {', '.join(selected_columns)} FROM [{table_name}]"
+    query = f"SELECT {distinct_clause} {', '.join(selected_columns)} FROM {qt(table_name)}"
 
     if join_statements:
         query += " " + " ".join(join_statements)
@@ -384,23 +374,23 @@ def get_columns_data(table_name, columns=None, delimiter=" | ", data_type="dataf
                     start_val, end_val = between_values
                     start_str = _quote_sql_value(start_val, column_type)
                     end_str = _quote_sql_value(end_val, column_type)
-                    where_clauses.append(f"[{table_prefix}].[{column_name}] BETWEEN {start_str} AND {end_str}")
+                    where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} BETWEEN {start_str} AND {end_str}")
 
             elif isinstance(condition, list) or (isinstance(condition, tuple) and condition[0] in ["IN", "NOT IN"]):
                 operator, values = ("IN", condition) if isinstance(condition, list) else condition
                 if values:
                     condition_str = ", ".join(_quote_sql_value(v, column_type) for v in values)
-                    where_clauses.append(f"[{table_prefix}].[{column_name}] {operator} ({condition_str})")
+                    where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} {operator} ({condition_str})")
 
             elif isinstance(condition, tuple) and len(condition) == 2:
                 operator, value = condition
                 value_str = _quote_sql_value(value, column_type)
-                where_clauses.append(f"[{table_prefix}].[{column_name}] {operator} {value_str}")
+                where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} {operator} {value_str}")
             elif isinstance(condition, str) and condition.strip().upper() in ['IS NULL', 'IS NOT NULL']:
-                where_clauses.append(f"[{table_prefix}].[{column_name}] {condition}")
+                where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} {condition}")
             else:
                 value_str = _quote_sql_value(condition, column_type)
-                where_clauses.append(f"[{table_prefix}].[{column_name}] = {value_str}")
+                where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} = {value_str}")
 
     # Search Clause
     if search_value and search_columns:
@@ -410,7 +400,7 @@ def get_columns_data(table_name, columns=None, delimiter=" | ", data_type="dataf
             table_prefix = col.split('.')[0] if '.' in col else table_name
             col_name_only = col.split('.')[-1]
             
-            search_conditions.append(f"CAST([{table_prefix}].[{col_name_only}] AS TEXT) LIKE '%{safe_search_value}%'")
+            search_conditions.append(f"CAST({qi(table_prefix)}.{qi(col_name_only)} AS TEXT) LIKE '%{safe_search_value}%'")
         
         if search_conditions:
             where_clauses.append(f"({ ' OR '.join(search_conditions) })")
@@ -421,14 +411,14 @@ def get_columns_data(table_name, columns=None, delimiter=" | ", data_type="dataf
         
     # GROUP BY
     if len(group_by):
-        group_statements = [f"[{col}]" for col in group_by]
+        group_statements = [f"{qi(col)}" for col in group_by]
         query += " GROUP BY " + ", ".join(group_statements)
 
     # ORDER BY
     if len(col_order):
         order_statements = []
         for col, order in col_order.items():
-            order_statements.append(f"[{col}] {order}")
+            order_statements.append(f"{qi(col)} {order}")
         query += " ORDER BY " + ", ".join(order_statements)
 
     # Phân trang
@@ -440,7 +430,10 @@ def get_columns_data(table_name, columns=None, delimiter=" | ", data_type="dataf
     cursor.execute(query)
     rows = cursor.fetchall()
     columns_from_db = [description[0] for description in cursor.description]
-    df = pd.DataFrame([dict(row) for row in rows], columns=columns_from_db)
+    if IS_POSTGRES:
+        df = pd.DataFrame(rows, columns=columns_from_db) if rows else pd.DataFrame(columns=columns_from_db)
+    else:
+        df = pd.DataFrame([dict(row) for row in rows], columns=columns_from_db)
 
     # Apply Join Replace Logic
     if joins:
@@ -555,12 +548,12 @@ def get_total_count(table_name, col_where=None, search_value=None, search_column
     cursor = conn.cursor()
 
     # Lấy kiểu dữ liệu các cột
-    cursor.execute(f"PRAGMA table_info([{table_name}])")
-    column_info = cursor.fetchall()
+    column_info = db.get_table_info(cursor, table_name)
     column_types = {row[1]: row[2].lower() for row in column_info}
 
+    qi = db.quote_identifier
     # Xây dựng câu lệnh
-    query = f"SELECT COUNT(*) FROM [{table_name}]"
+    query = f"SELECT COUNT(*) FROM {qi(table_name)}"
 
     # JOIN
     join_statements = []
@@ -571,9 +564,9 @@ def get_total_count(table_name, col_where=None, search_value=None, search_column
             join_alias = join.get("alias", join_table)
             join_on = join.get("on")
             on_conditions = " AND ".join(
-                f"[{from_table}].[{key}] = [{join_alias}].[{value}]" for key, value in join_on.items()
+                f"{qi(from_table)}.{qi(key)} = {qi(join_alias)}.{qi(value)}" for key, value in join_on.items()
             )
-            join_statement = f"LEFT JOIN [{join_table}] AS [{join_alias}] ON {on_conditions}"
+            join_statement = f"LEFT JOIN {qi(join_table)} AS {qi(join_alias)} ON {on_conditions}"
             join_statements.append(join_statement)
     if join_statements:
         query += " " + " ".join(join_statements)
@@ -607,21 +600,21 @@ def get_total_count(table_name, col_where=None, search_value=None, search_column
                     start_value, end_value = between_values
                     start_str = _quote_value(start_value)
                     end_str = _quote_value(end_value)
-                    where_clauses.append(f"[{table_prefix}].[{column_name}] BETWEEN {start_str} AND {end_str}")
+                    where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} BETWEEN {start_str} AND {end_str}")
             elif isinstance(condition, list) or (isinstance(condition, tuple) and condition[0] in ["IN", "NOT IN"]):
                 operator, values = ("IN", condition) if isinstance(condition, list) else condition
                 if values:
                     condition_str = ", ".join(_quote_value(v) for v in values)
-                    where_clauses.append(f"[{table_prefix}].[{column_name}] {operator} ({condition_str})")
+                    where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} {operator} ({condition_str})")
             elif isinstance(condition, tuple) and len(condition) == 2:
                 operator, value = condition
                 value_str = _quote_value(value)
-                where_clauses.append(f"[{table_prefix}].[{column_name}] {operator} {value_str}")
+                where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} {operator} {value_str}")
             elif isinstance(condition, str) and condition.strip().upper() in ['IS NULL', 'IS NOT NULL']:
-                where_clauses.append(f"[{table_prefix}].[{column_name}] {condition}")
+                where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} {condition}")
             else:
                 value_str = _quote_value(condition)
-                where_clauses.append(f"[{table_prefix}].[{column_name}] = {value_str}")
+                where_clauses.append(f"{qi(table_prefix)}.{qi(column_name)} = {value_str}")
 
     if search_value and search_columns:
         search_conditions = []
@@ -629,7 +622,7 @@ def get_total_count(table_name, col_where=None, search_value=None, search_column
         for col in search_columns:
             table_prefix = col.split('.')[0] if '.' in col else table_name
             col_name_only = col.split('.')[-1]
-            search_conditions.append(f"CAST([{table_prefix}].[{col_name_only}] AS TEXT) LIKE '%{safe_search_value}%'")
+            search_conditions.append(f"CAST({qi(table_prefix)}.{qi(col_name_only)} AS TEXT) LIKE '%{safe_search_value}%'")
         if search_conditions:
             where_clauses.append(f"({ ' OR '.join(search_conditions) })")
 
@@ -651,10 +644,12 @@ def insert_data_to_table(table_name, columns_list, values_list):
     try:
         conn = connect_db()
         cursor = conn.cursor()
+        qi = db.quote_identifier
 
-        columns = "[" + '], ['.join(columns_list) + "]"
-        placeholders = ', '.join(['?' for _ in range(len(values_list))])
-        query = f"INSERT INTO [{table_name}] ({columns}) VALUES ({placeholders})"
+        columns = ", ".join([qi(c) for c in columns_list])
+        ph = '%s' if IS_POSTGRES else '?'
+        placeholders = ', '.join([ph for _ in range(len(values_list))])
+        query = f"INSERT INTO {qi(table_name)} ({columns}) VALUES ({placeholders})"
         
         cursor.execute(query, values_list)
         conn.commit()
@@ -668,12 +663,16 @@ def query_to_dataframe(query):
     """Thực hiện truy vấn và trả về DataFrame"""
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute(query)
+    adapted_query = db.adapt_sql(query)
+    cursor.execute(adapted_query)
     
     columns = [description[0] for description in cursor.description]
     data = cursor.fetchall()
     
-    df = pd.DataFrame([dict(row) for row in data])
+    if IS_POSTGRES:
+        df = pd.DataFrame(data, columns=columns) if data else pd.DataFrame(columns=columns)
+    else:
+        df = pd.DataFrame([dict(row) for row in data])
     
     cursor.close()
     conn.close()
@@ -684,10 +683,12 @@ def delete_data_from_table_by_ids(table_name, list_ids, nguoisua, thoigiansua, c
     """Đánh dấu xóa các bản ghi theo ID"""
     conn = connect_db()
     cursor = conn.cursor()
+    qi = db.quote_identifier
+    ph = '%s' if IS_POSTGRES else '?'
 
     try:
         ids_string = "'" + "','".join(map(str, list_ids)) + "'"
-        sql = f"UPDATE [{table_name}] SET [{col_mark}] = 1, [Người sửa]=?, [Thời gian sửa]=? WHERE [{col_where}] IN ({ids_string})"
+        sql = f"UPDATE {qi(table_name)} SET {qi(col_mark)} = 1, {qi('Người sửa')}={ph}, {qi('Thời gian sửa')}={ph} WHERE {qi(col_where)} IN ({ids_string})"
         cursor.execute(sql, (nguoisua, thoigiansua))
         
         conn.commit()
@@ -718,6 +719,8 @@ def update_database_from_dataframe(table_name, dataframe, nguoisua, column_key, 
         
         conn = connect_db()
         cursor = conn.cursor()
+        qi = db.quote_identifier
+        ph = '%s' if IS_POSTGRES else '?'
 
         columns_to_drop = ['Người tạo', 'Thời gian tạo', 'Người sửa', 'Thời gian sửa', 'Đã xóa', 'Fullname']
         existing_columns_to_drop = [col for col in columns_to_drop if col in dataframe.columns]
@@ -731,14 +734,14 @@ def update_database_from_dataframe(table_name, dataframe, nguoisua, column_key, 
         for index, row in dataframe.iterrows():
             key_value = row[column_key]
             update_columns = dataframe.drop(columns=[column_key]).columns
-            column_names = [f"[{column}]" for column in update_columns]
+            column_names = [qi(column) for column in update_columns]
 
             sql = f'''
-                UPDATE [{table_name}]
-                SET {", ".join([f"{col} = ?" for col in column_names])},
-                    [Thời gian sửa] = ?,
-                    [Người sửa] = ?
-                WHERE [{column_key}] = ?
+                UPDATE {qi(table_name)}
+                SET {", ".join([f"{col} = {ph}" for col in column_names])},
+                    {qi('Thời gian sửa')} = {ph},
+                    {qi('Người sửa')} = {ph}
+                WHERE {qi(column_key)} = {ph}
             '''
             
             new_info = list(row[update_columns]) + [fn.get_vietnam_time().strftime('%Y-%m-%d %H:%M:%S'), nguoisua, key_value]
@@ -819,9 +822,11 @@ def insert_data_to_sql_server(table_name, dataframe, created_by=None, delete_old
         
         conn = connect_db()
         cursor = conn.cursor()
+        qi = db.quote_identifier
+        ph = '%s' if IS_POSTGRES else '?'
 
         if delete_old_data:
-            cursor.execute(f"DELETE FROM [{table_name}]")
+            cursor.execute(f"DELETE FROM {qi(table_name)}")
         
         if created_by is not None:
             dataframe['Người tạo'] = created_by
@@ -834,24 +839,23 @@ def insert_data_to_sql_server(table_name, dataframe, created_by=None, delete_old
                 params = []
                 for col in delete_by_ids:
                     if col in row.index and pd.notna(row[col]):
-                        conditions.append(f"[{col}] = ?")
+                        conditions.append(f"{qi(col)} = {ph}")
                         params.append(row[col])
                 
                 if conditions:
                     # Thêm điều kiện Đã xóa = 0 nếu cột tồn tại
-                    cursor.execute(f"PRAGMA table_info([{table_name}])")
-                    columns_in_table = [col[1] for col in cursor.fetchall()]
-                    if 'Đã xóa' in columns_in_table:
-                        conditions.append("[Đã xóa] = 0")
+                    table_cols = get_table_columns(table_name)
+                    if 'Đã xóa' in table_cols:
+                        conditions.append(f"{qi('Đã xóa')} = 0")
                     
                     where_clause = " AND ".join(conditions)
-                    sql = f"DELETE FROM [{table_name}] WHERE {where_clause}"
+                    sql = f"DELETE FROM {qi(table_name)} WHERE {where_clause}"
                     cursor.execute(sql, tuple(params))
             
             # Insert dòng mới
-            placeholders = ', '.join(['?' for _ in row])
-            columns = '], ['.join(dataframe.columns)
-            sql = f"INSERT INTO [{table_name}] ([{columns}]) VALUES ({placeholders})"
+            placeholders = ', '.join([ph for _ in row])
+            columns = ', '.join([qi(c) for c in dataframe.columns])
+            sql = f"INSERT INTO {qi(table_name)} ({columns}) VALUES ({placeholders})"
             cursor.execute(sql, tuple(row))
 
         conn.commit()
@@ -874,8 +878,7 @@ def get_table_columns(table_name):
     conn = connect_db()
     cursor = conn.cursor()
     try:
-        cursor.execute(f"PRAGMA table_info([{table_name}])")
-        rows = cursor.fetchall()
+        rows = db.get_table_info(cursor, table_name)
         columns = [row[1] for row in rows]
         conn.close()
         return columns
@@ -885,22 +888,20 @@ def get_table_columns(table_name):
         return []
 
 def drop_all_filtered_unique_indexes(table_name):
-    """Xóa tất cả các unique index (SQLite không hỗ trợ filtered index như SQL Server)"""
+    """Xóa tất cả các unique index"""
     conn = connect_db()
     cursor = conn.cursor()
+    qi = db.quote_identifier
     
     try:
-        # Lấy danh sách index
-        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?", (table_name,))
-        indexes = cursor.fetchall()
+        indexes = db.get_index_list(cursor, table_name)
         
         dropped = []
         for idx in indexes:
             idx_name = idx[0]
-            # Không xóa index tự động tạo bởi SQLite
-            if not idx_name.startswith('sqlite_'):
+            if not str(idx_name).startswith('sqlite_') and not str(idx_name).startswith('pg_'):
                 try:
-                    cursor.execute(f"DROP INDEX IF EXISTS [{idx_name}]")
+                    cursor.execute(f"DROP INDEX IF EXISTS {qi(idx_name)}")
                     dropped.append(idx_name)
                 except:
                     pass
@@ -931,8 +932,7 @@ def get_table_columns_info(table_name):
     
     system_columns = ['Người tạo', 'Thời gian tạo', 'Người sửa', 'Thời gian sửa', 'Đã xóa']
     
-    cursor.execute(f"PRAGMA table_info([{table_name}])")
-    rows = cursor.fetchall()
+    rows = db.get_table_info(cursor, table_name)
     
     results = []
     for row in rows:
@@ -945,7 +945,6 @@ def get_table_columns_info(table_name):
         if col_name in system_columns:
             continue
             
-        # Chuyển đổi kiểu dữ liệu SQLite về dạng SQL Server-like để tương thích
         if col_type.upper() == 'TEXT':
             type_str = 'NVARCHAR(n)'
             max_length = 50
@@ -1092,8 +1091,7 @@ def get_table_structure(table_name):
     
     system_columns = ['Người tạo', 'Thời gian tạo', 'Người sửa', 'Thời gian sửa', 'Đã xóa']
     
-    cursor.execute(f"PRAGMA table_info([{table_name}])")
-    rows = cursor.fetchall()
+    rows = db.get_table_info(cursor, table_name)
     
     data = []
     for row in rows:

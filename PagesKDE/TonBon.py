@@ -1,7 +1,8 @@
 import streamlit as st
 from admin.sys_kde_components import *
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+from utils.import_notification import send_import_notification
 
 # Loại sản phẩm
 LOAI_SAN_PHAM = ['Thành phẩm', 'Bán thành phẩm']
@@ -25,13 +26,13 @@ def app(selected):
     
     # Tạo tabs
     tab1, tab2, tab3 = st.tabs([
-        "✍️ Nhập thủ công",
+        "📋 Danh sách Tồn bồn",
         "📁 Import Excel",
-        "📋 Danh sách Tồn bồn"
+        "✍️ Nhập thủ công"
     ])
     
-    # TAB 1: Nhập thủ công
-    with tab1:
+    # TAB 3: Nhập thủ công
+    with tab3:
         st.header("✍️ Nhập Tồn bồn thủ công")
         
         st.info("""
@@ -54,8 +55,8 @@ def app(selected):
         with col1:
             ngay_kiem = st.date_input(
                 "📅 Ngày kiểm kho",
-                value=fn.get_vietnam_time().date(),
-                help="Ngày kiểm tra tồn bồn"
+                value=fn.get_vietnam_time().date() - timedelta(days=1),
+                help="Ngày kiểm tra tồn bồn (mặc định: N-1)"
             )
             
             loai_sp = st.selectbox(
@@ -111,7 +112,7 @@ def app(selected):
         )
         
         # Nút lưu
-        if st.button("💾 Lưu Tồn bồn", type="primary", use_container_width=True):
+        if st.button("💾 Lưu Tồn bồn", type="primary", width="stretch"):
             if san_pham and so_luong > 0:
                 # Tách ID sản phẩm
                 id_san_pham = san_pham.split('|')[-1].strip() if '|' in san_pham else None
@@ -167,6 +168,7 @@ def app(selected):
         data_source = st.radio(
             "🔌 Nguồn dữ liệu",
             options=["📁 File local", "📧 Từ email (Tồn bồn folder)"],
+            index=1,  # Mặc định chọn "Từ email"
             horizontal=True,
             key="tonbon_data_source"
         )
@@ -187,7 +189,7 @@ def app(selected):
                     receiver = EmailReceiver()
                     
                     # Nút tìm email
-                    if st.button("🔄 Tìm email báo cáo tồn bồn", use_container_width=True):
+                    if st.button("🔄 Tìm email báo cáo tồn bồn", width="stretch"):
                         with st.spinner("Đang kết nối Outlook..."):
                             emails = receiver.get_tonbon_emails(days_back=7)
                             if emails:
@@ -250,17 +252,31 @@ def app(selected):
                     st.info(f"📄 Đang sử dụng file: `{excel_path}`")
                     
             else:
-                # File local
-                excel_path = "EXCEL/Báo cáo tồn bồn thành phẩm 01.2026.xlsm"
-                st.markdown(f"**📄 File:** `{excel_path}`")
+                # File local - tìm file mới nhất (hỗ trợ cả tên có dấu và không dấu)
+                from pathlib import Path
+                excel_folder = Path("D:/PYTHON/B7KHSX/EXCEL")
+                tonbon_files = []
+                # Tìm cả file có dấu và không dấu
+                tonbon_files.extend(excel_folder.glob("Báo cáo tồn bồn thành phẩm*.*"))
+                tonbon_files.extend(excel_folder.glob("Bao cao ton bon thanh pham*.*"))
+                # Loại bỏ file Copy/backup
+                tonbon_files = [f for f in tonbon_files if not f.name.startswith("Copy")]
+                tonbon_files = sorted(tonbon_files, key=lambda f: f.name, reverse=True)
+                
+                if tonbon_files:
+                    excel_path = str(tonbon_files[0])
+                    st.markdown(f"**📄 File:** `EXCEL/{tonbon_files[0].name}`")
+                else:
+                    excel_path = None
+                    st.warning("📭 Không tìm thấy file Báo cáo tồn bồn thành phẩm trong folder EXCEL")
             
             col1, col2 = st.columns(2)
             
             with col1:
                 ngay_kiem = st.date_input(
                     "📅 Ngày kiểm kho",
-                    value=fn.get_vietnam_time().date(),
-                    help="Ngày kiểm tra tồn bồn",
+                    value=fn.get_vietnam_time().date() - timedelta(days=1),
+                    help="Ngày kiểm tra tồn bồn (mặc định: N-1)",
                     key="import_ngay_kiem"
                 )
             
@@ -274,30 +290,59 @@ def app(selected):
             
             # Chỉ hiển thị nút nếu có file path
             if excel_path:
-                # Nút đọc nhanh (trực tiếp từ Sheet 2)
-                if st.button("⚡ Xem trước dữ liệu (Nhanh)", type="primary", use_container_width=True):
-                    with st.spinner("📖 Đang đọc dữ liệu từ Sheet 2..."):
-                        df_preview = importer.read_direct_from_cells(excel_path)
-                        
-                        if len(df_preview) > 0:
-                            st.success(f"✅ Đọc được {len(df_preview)} mã sản phẩm")
+                # Chọn chế độ import
+                import_mode = st.radio(
+                    "📌 Chế độ import",
+                    options=["Import tất cả ngày (1-31)", "Import 1 ngày cụ thể"],
+                    horizontal=True,
+                    help="Chọn cách import dữ liệu"
+                )
+                
+                if import_mode == "Import tất cả ngày (1-31)":
+                    # Nút đọc tất cả sheets
+                    if st.button("⚡ Xem trước tất cả ngày", type="primary", width="stretch"):
+                        with st.spinner("📖 Đang đọc dữ liệu từ tất cả sheets (1-31)..."):
+                            df_preview = importer.read_all_sheets_with_dates(excel_path)
                             
-                            # Tính tổng
-                            total_kg = df_preview['Số lượng (kg)'].sum()
-                            st.metric("Tổng khối lượng", f"{total_kg:,.0f} kg")
+                            if len(df_preview) > 0:
+                                unique_days = df_preview['Ngày'].nunique()
+                                st.success(f"✅ Đọc được {len(df_preview)} dòng từ {unique_days} ngày")
+                                
+                                # Thống kê theo ngày
+                                stats = df_preview.groupby('Ngày')['Số lượng (kg)'].sum().reset_index()
+                                stats.columns = ['Ngày', 'Tổng kg']
+                                st.dataframe(stats, width="stretch")
+                                
+                                st.metric("Tổng khối lượng", f"{df_preview['Số lượng (kg)'].sum():,.0f} kg")
+                                
+                                st.session_state['tonbon_preview_all'] = df_preview
+                            else:
+                                st.warning("⚠️ Không tìm thấy dữ liệu trong các sheet 1-31")
+                else:
+                    # Nút đọc 1 sheet cụ thể
+                    if st.button("⚡ Xem trước dữ liệu (1 ngày)", type="primary", width="stretch"):
+                        with st.spinner("📖 Đang đọc dữ liệu..."):
+                            # Đọc từ sheet có tên = ngày
+                            day_num = ngay_kiem.day
+                            df_preview = importer.read_direct_from_cells(excel_path, sheet_index=str(day_num))
                             
-                            st.dataframe(
-                                df_preview,
-                                use_container_width=True,
-                                column_config={
-                                    'Số lượng (kg)': st.column_config.NumberColumn(format="%,.0f")
-                                }
-                            )
-                            
-                            # Lưu vào session để import
-                            st.session_state['tonbon_preview'] = df_preview
-                        else:
-                            st.warning("⚠️ Không tìm thấy dữ liệu. Kiểm tra file Excel có tồn tại và có dữ liệu ở Sheet 2 không?")
+                            if len(df_preview) > 0:
+                                st.success(f"✅ Đọc được {len(df_preview)} mã sản phẩm (ngày {day_num})")
+                                
+                                total_kg = df_preview['Số lượng (kg)'].sum()
+                                st.metric("Tổng khối lượng", f"{total_kg:,.0f} kg")
+                                
+                                st.dataframe(
+                                    df_preview,
+                                    width="stretch",
+                                    column_config={
+                                        'Số lượng (kg)': st.column_config.NumberColumn(format="%,.0f")
+                                    }
+                                )
+                                
+                                st.session_state['tonbon_preview'] = df_preview
+                            else:
+                                st.warning(f"⚠️ Không tìm thấy dữ liệu ở sheet '{day_num}'")
             else:
                 st.warning("⚠️ Chưa có file. Nhấn 'Tìm email' rồi 'Tải file' để bắt đầu.")
             
@@ -308,55 +353,140 @@ def app(selected):
                 col_btn1, col_btn2 = st.columns(2)
                 
                 with col_btn1:
-                    overwrite = st.checkbox("🔄 Ghi đè dữ liệu cũ (cùng ngày)", value=False)
+                    overwrite = st.checkbox("🔄 Ghi đè dữ liệu cũ", value=True, help="Mặc định bật: Dữ liệu ngày cũ sẽ bị thay thế khi import lại")
                 
                 with col_btn2:
                     pass
                 
-                if st.button("📥 Import vào Database", type="primary", use_container_width=True):
-                    with st.spinner("Đang import..."):
-                        result = importer.import_tonbon(
-                            file_path=excel_path,
-                            ngay_kiem=ngay_kiem.strftime('%Y-%m-%d'),
-                            nguoi_import=st.session_state.username,
-                            loai_san_pham=loai_sp,
-                            overwrite=overwrite
-                        )
-                        
-                        if result['success'] > 0:
-                            st.success(f"✅ Import thành công **{result['success']}** / {result['total']} sản phẩm!")
-                            st.session_state.df_key += 1
+                if import_mode == "Import tất cả ngày (1-31)":
+                    if st.button("📥 Import TẤT CẢ các ngày", type="primary", width="stretch"):
+                        with st.spinner("Đang import tất cả ngày..."):
+                            result = importer.import_all_days(
+                                file_path=excel_path,
+                                nguoi_import=st.session_state.username,
+                                loai_san_pham=loai_sp,
+                                overwrite=overwrite
+                            )
                             
-                            # Hiển thị mã không tìm thấy
-                            if result['not_found']:
-                                with st.expander(f"⚠️ Không tìm thấy {len(result['not_found'])} mã sản phẩm", expanded=True):
-                                    for code in result['not_found']:
-                                        st.markdown(f"- `{code}`")
-                        else:
-                            if result['not_found']:
-                                st.error(f"❌ Không import được. {len(result['not_found'])} mã không tìm thấy trong database.")
-                                with st.expander("Chi tiết mã lỗi"):
-                                    for code in result['not_found']:
-                                        st.markdown(f"- `{code}`")
+                            if result['success'] > 0:
+                                st.success(f"✅ Import thành công **{result['success']}** dòng từ **{result.get('days_imported', 'N/A')}** ngày!")
+                                st.balloons()
+                                st.session_state.df_key += 1
+                                
+                                if result['not_found']:
+                                    with st.expander(f"⚠️ {len(result['not_found'])} mã không tìm thấy", expanded=True):
+                                        for code in result['not_found'][:20]:
+                                            st.markdown(f"- `{code}`")
+                                    
+                                    # Gửi email thông báo
+                                    email_sent = send_import_notification(
+                                        not_found_codes=result['not_found'],
+                                        filename=excel_path,
+                                        import_type='TONBON',
+                                        ngay_import='',
+                                        nguoi_import=st.session_state.username
+                                    )
+                                    if email_sent:
+                                        st.info(f"📧 Đã gửi email thông báo về {len(result['not_found'])} mã SP chưa có dữ liệu tới phinho@cp.com.vn")
                             else:
-                                st.error(f"❌ Lỗi: {result['errors']}")
+                                if result['not_found']:
+                                    st.error(f"❌ Không import được. {len(result['not_found'])} mã không tìm thấy trong database.")
+                                    # Gửi email thông báo
+                                    email_sent = send_import_notification(
+                                        not_found_codes=result['not_found'],
+                                        filename=excel_path,
+                                        import_type='TONBON',
+                                        ngay_import='',
+                                        nguoi_import=st.session_state.username
+                                    )
+                                    if email_sent:
+                                        st.info(f"📧 Đã gửi email thông báo về {len(result['not_found'])} mã SP chưa có dữ liệu tới phinho@cp.com.vn")
+                                else:
+                                    st.error(f"❌ Lỗi: {result.get('errors', 'Unknown')}")
+                else:
+                    if st.button("📥 Import vào Database (1 ngày)", type="primary", width="stretch"):
+                        with st.spinner("Đang import..."):
+                            result = importer.import_tonbon(
+                                file_path=excel_path,
+                                ngay_kiem=ngay_kiem.strftime('%Y-%m-%d'),
+                                nguoi_import=st.session_state.username,
+                                loai_san_pham=loai_sp,
+                                overwrite=overwrite
+                            )
+                            
+                            if result['success'] > 0:
+                                st.success(f"✅ Import thành công **{result['success']}** / {result['total']} sản phẩm!")
+                                st.session_state.df_key += 1
+                                
+                                # Hiển thị mã không tìm thấy
+                                if result['not_found']:
+                                    with st.expander(f"⚠️ Không tìm thấy {len(result['not_found'])} mã sản phẩm", expanded=True):
+                                        for code in result['not_found']:
+                                            st.markdown(f"- `{code}`")
+                                    
+                                    # Gửi email thông báo
+                                    email_sent = send_import_notification(
+                                        not_found_codes=result['not_found'],
+                                        filename=excel_path,
+                                        import_type='TONBON',
+                                        ngay_import=ngay_kiem.strftime('%Y-%m-%d'),
+                                        nguoi_import=st.session_state.username
+                                    )
+                                    if email_sent:
+                                        st.info(f"📧 Đã gửi email thông báo về {len(result['not_found'])} mã SP chưa có dữ liệu tới phinho@cp.com.vn")
+                            else:
+                                if result['not_found']:
+                                    st.error(f"❌ Không import được. {len(result['not_found'])} mã không tìm thấy trong database.")
+                                    with st.expander("Chi tiết mã lỗi"):
+                                        for code in result['not_found']:
+                                            st.markdown(f"- `{code}`")
+                                    
+                                    # Gửi email thông báo
+                                    email_sent = send_import_notification(
+                                        not_found_codes=result['not_found'],
+                                        filename=excel_path,
+                                        import_type='TONBON',
+                                        ngay_import=ngay_kiem.strftime('%Y-%m-%d'),
+                                        nguoi_import=st.session_state.username
+                                    )
+                                    if email_sent:
+                                        st.info(f"📧 Đã gửi email thông báo về {len(result['not_found'])} mã SP chưa có dữ liệu tới phinho@cp.com.vn")
+                                else:
+                                    st.error(f"❌ Lỗi: {result['errors']}")
                             
         except ImportError as e:
             st.error(f"❌ Lỗi import module: {e}")
         except Exception as e:
             st.error(f"❌ Lỗi: {e}")
     
-    # TAB 3: Danh sách Tồn bồn
-    with tab3:
+    # TAB 1: Danh sách Tồn bồn
+    with tab1:
         st.header("📋 Danh sách Tồn bồn")
+        
+        # Lấy ngày gần nhất có dữ liệu
+        import sqlite3
+        try:
+            conn_check = sqlite3.connect('database_new.db')
+            cursor = conn_check.cursor()
+            cursor.execute("SELECT MAX([Ngày kiểm kho]) FROM TonBon WHERE [Đã xóa] = 0")
+            latest = cursor.fetchone()[0]
+            conn_check.close()
+            
+            if latest:
+                parts = latest.split('-')
+                default_date = datetime(int(parts[0]), int(parts[1]), int(parts[2])).date()
+            else:
+                default_date = None
+        except:
+            default_date = None
         
         # Bộ lọc
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             filter_date = st.date_input(
                 "Lọc theo ngày",
-                value=None,
-                help="Để trống để xem tất cả",
+                value=default_date,
+                help="Mặc định là ngày gần nhất có dữ liệu",
                 key="filter_date_tonbon"
             )
         with col2:
@@ -383,6 +513,8 @@ def app(selected):
         col_where = {'Đã xóa': ('=', 0)}
         if filter_date:
             col_where['Ngày kiểm kho'] = ('=', filter_date.strftime('%Y-%m-%d'))
+            # Mặc định hiển thị All khi lọc theo ngày
+            st.session_state.page_size = 'All'
         if filter_loai != 'Tất cả':
             col_where['Loại sản phẩm'] = ('=', filter_loai)
         if filter_trang_thai != 'Tất cả':
@@ -390,11 +522,22 @@ def app(selected):
         if filter_ca != 'Tất cả':
             col_where['Ca sản xuất'] = ('=', filter_ca)
         
+        # Hàm chuyển đổi format ngày
+        def format_dates(df):
+            if 'Ngày kiểm kho' in df.columns:
+                df['Ngày kiểm kho'] = pd.to_datetime(df['Ngày kiểm kho']).dt.strftime('%d-%m-%Y')
+            if 'Thời gian tạo' in df.columns:
+                df['Thời gian tạo'] = pd.to_datetime(df['Thời gian tạo']).dt.strftime('%d-%m-%Y %H:%M')
+            return df
+        
         column_config = {
-            'Ngày kiểm kho': st.column_config.DateColumn('Ngày kiểm', format='DD/MM/YYYY'),
             'Số lượng (kg)': st.column_config.NumberColumn('Số lượng (kg)', format="%,.0f"),
-            'Thời gian tạo': st.column_config.DatetimeColumn('Thời gian tạo', format='DD/MM/YYYY HH:mm'),
         }
+        
+        # Thiết lập page_size = 'All' để hiển thị tất cả
+        if 'page_size' not in st.session_state or st.session_state.get('tonbon_first_load', True):
+            st.session_state.page_size = 'All'
+            st.session_state['tonbon_first_load'] = False
         
         dataframe_with_selections(
             table_name="TonBon",
@@ -406,7 +549,7 @@ def app(selected):
             ],
             colums_disable=['ID', 'Mã tồn bồn', 'Người tạo', 'Thời gian tạo'],
             col_where=col_where,
-            col_order={'ID': 'DESC'},
+            col_order={'Ngày kiểm kho': 'DESC', 'ID': 'DESC'},
             joins=[
                 {
                     'table': 'SanPham',
@@ -417,10 +560,11 @@ def app(selected):
             ],
             column_config=column_config,
             key=f'TonBon_{st.session_state.df_key}',
-            join_user_info=False  # Không join để ẩn cột Fullname
+            join_user_info=False,
+            post_process_func=format_dates
         )
         
-        # Thống kê tổng hợp
+        # Thống kê tổng hợp theo số bồn
         st.markdown("---")
         st.subheader("📊 Thống kê Tồn bồn")
         
@@ -428,45 +572,74 @@ def app(selected):
             import sqlite3
             conn = sqlite3.connect('database_new.db')
             
-            # Query thống kê theo loại và trạng thái
-            stats_query = """
-                SELECT 
-                    [Loại sản phẩm],
-                    [Trạng thái],
-                    COUNT(*) as so_bon,
-                    SUM([Số lượng (kg)]) as tong_kg
+            # Điều kiện lọc theo ngày
+            date_condition = ""
+            if filter_date:
+                date_condition = f"AND [Ngày kiểm kho] = '{filter_date.strftime('%Y-%m-%d')}'"
+            
+            # Query thống kê Thành phẩm (bồn 99-134)
+            # Số bồn được lưu dạng "X" hoặc "X, Y, Z" (nhiều bồn)
+            thanh_pham_query = f"""
+                SELECT SUM([Số lượng (kg)]) as tong_kg, COUNT(*) as so_dong
                 FROM TonBon
                 WHERE [Đã xóa] = 0
-                GROUP BY [Loại sản phẩm], [Trạng thái]
-                ORDER BY [Loại sản phẩm], tong_kg DESC
+                {date_condition}
+                AND (
+                    CAST(REPLACE(REPLACE([Số bồn], ',', ''), ' ', '') AS INTEGER) BETWEEN 99 AND 134
+                    OR [Số bồn] LIKE '%99%' OR [Số bồn] LIKE '%100%' OR [Số bồn] LIKE '%101%'
+                    OR [Số bồn] LIKE '%102%' OR [Số bồn] LIKE '%103%' OR [Số bồn] LIKE '%104%'
+                    OR [Số bồn] LIKE '%105%' OR [Số bồn] LIKE '%106%' OR [Số bồn] LIKE '%107%'
+                    OR [Số bồn] LIKE '%108%' OR [Số bồn] LIKE '%109%' OR [Số bồn] LIKE '%110%'
+                    OR [Số bồn] LIKE '%111%' OR [Số bồn] LIKE '%112%' OR [Số bồn] LIKE '%113%'
+                    OR [Số bồn] LIKE '%114%' OR [Số bồn] LIKE '%115%' OR [Số bồn] LIKE '%116%'
+                    OR [Số bồn] LIKE '%117%' OR [Số bồn] LIKE '%118%' OR [Số bồn] LIKE '%119%'
+                    OR [Số bồn] LIKE '%120%' OR [Số bồn] LIKE '%121%' OR [Số bồn] LIKE '%122%'
+                    OR [Số bồn] LIKE '%123%' OR [Số bồn] LIKE '%124%' OR [Số bồn] LIKE '%125%'
+                    OR [Số bồn] LIKE '%126%' OR [Số bồn] LIKE '%127%' OR [Số bồn] LIKE '%128%'
+                    OR [Số bồn] LIKE '%129%' OR [Số bồn] LIKE '%130%' OR [Số bồn] LIKE '%131%'
+                    OR [Số bồn] LIKE '%132%' OR [Số bồn] LIKE '%133%' OR [Số bồn] LIKE '%134%'
+                )
             """
             
-            stats = pd.read_sql_query(stats_query, conn)
+            # Query thống kê Bán thành phẩm (bồn 86-98)
+            ban_tp_query = f"""
+                SELECT SUM([Số lượng (kg)]) as tong_kg, COUNT(*) as so_dong
+                FROM TonBon
+                WHERE [Đã xóa] = 0
+                {date_condition}
+                AND (
+                    [Số bồn] LIKE '%86%' OR [Số bồn] LIKE '%87%' OR [Số bồn] LIKE '%88%'
+                    OR [Số bồn] LIKE '%89%' OR [Số bồn] LIKE '%90%' OR [Số bồn] LIKE '%91%'
+                    OR [Số bồn] LIKE '%92%' OR [Số bồn] LIKE '%93%' OR [Số bồn] LIKE '%94%'
+                    OR [Số bồn] LIKE '%95%' OR [Số bồn] LIKE '%96%' OR [Số bồn] LIKE '%97%'
+                    OR [Số bồn] LIKE '%98%'
+                )
+            """
+            
+            tp_result = pd.read_sql_query(thanh_pham_query, conn)
+            btp_result = pd.read_sql_query(ban_tp_query, conn)
             conn.close()
             
-            if len(stats) > 0:
-                # Hiển thị theo loại sản phẩm
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("#### 📦 Thành phẩm")
-                    tp = stats[stats['Loại sản phẩm'] == 'Thành phẩm']
-                    if len(tp) > 0:
-                        for _, row in tp.iterrows():
-                            st.metric(row['Trạng thái'], f"{row['tong_kg']:,.0f} kg", f"{row['so_bon']} bồn")
-                    else:
-                        st.info("Không có dữ liệu")
-                
-                with col2:
-                    st.markdown("#### 🔄 Bán thành phẩm")
-                    btp = stats[stats['Loại sản phẩm'] == 'Bán thành phẩm']
-                    if len(btp) > 0:
-                        for _, row in btp.iterrows():
-                            st.metric(row['Trạng thái'], f"{row['tong_kg']:,.0f} kg", f"{row['so_bon']} bồn")
-                    else:
-                        st.info("Không có dữ liệu")
-            else:
-                st.info("Chưa có dữ liệu thống kê")
-                
+            # Hiển thị thống kê
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📦 Thành phẩm (Bồn 99-134)")
+                tong_tp = tp_result['tong_kg'].iloc[0] if tp_result['tong_kg'].iloc[0] else 0
+                so_dong_tp = tp_result['so_dong'].iloc[0] if tp_result['so_dong'].iloc[0] else 0
+                if tong_tp > 0:
+                    st.metric("Tổng khối lượng", f"{tong_tp:,.0f} kg", f"{so_dong_tp} dòng")
+                else:
+                    st.info("Không có dữ liệu")
+            
+            with col2:
+                st.markdown("#### 🔄 Bán thành phẩm (Bồn 86-98)")
+                tong_btp = btp_result['tong_kg'].iloc[0] if btp_result['tong_kg'].iloc[0] else 0
+                so_dong_btp = btp_result['so_dong'].iloc[0] if btp_result['so_dong'].iloc[0] else 0
+                if tong_btp > 0:
+                    st.metric("Tổng khối lượng", f"{tong_btp:,.0f} kg", f"{so_dong_btp} dòng")
+                else:
+                    st.info("Không có dữ liệu")
+                    
         except Exception as e:
             st.warning(f"Không thể tải thống kê: {e}")

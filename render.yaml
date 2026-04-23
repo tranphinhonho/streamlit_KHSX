@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: b7khsx-streamlit
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run main.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11"

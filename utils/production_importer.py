@@ -19,6 +19,17 @@ from typing import Dict, List, Optional
 import pandas as pd
 import re
 
+# Import email utilities
+try:
+    from utils.email_utils import send_outlook_email
+    EMAIL_AVAILABLE = True
+except ImportError:
+    try:
+        from .email_utils import send_outlook_email
+        EMAIL_AVAILABLE = True
+    except ImportError:
+        EMAIL_AVAILABLE = False
+
 
 class ProductionImporter:
     """Class xử lý import PRODUCTION CSV vào database Mixer"""
@@ -104,6 +115,84 @@ class ProductionImporter:
         conn.commit()
         conn.close()
     
+    def send_not_found_notification(
+        self,
+        not_found_codes: List[str],
+        filename: str,
+        ngay_san_xuat: str,
+        nguoi_import: str = "system"
+    ) -> bool:
+        """
+        Gửi email thông báo khi có sản phẩm không import được do chưa có dữ liệu
+        
+        Args:
+            not_found_codes: Danh sách mã sản phẩm không tìm thấy
+            filename: Tên file PRODUCTION đang import
+            ngay_san_xuat: Ngày sản xuất
+            nguoi_import: Người thực hiện import
+            
+        Returns:
+            True nếu gửi email thành công
+        """
+        if not EMAIL_AVAILABLE:
+            print("⚠️ Không thể gửi email: Module email_utils không khả dụng")
+            return False
+        
+        if not not_found_codes:
+            return True
+        
+        # Định dạng ngày
+        ngay_display = ngay_san_xuat
+        if ngay_san_xuat and '-' in ngay_san_xuat:
+            parts = ngay_san_xuat.split('-')
+            ngay_display = f"{parts[2]}/{parts[1]}/{parts[0]}"
+        
+        # Tạo nội dung email
+        subject = f"⚠️ KHSX Import: {len(not_found_codes)} sản phẩm chưa có dữ liệu - {ngay_display}"
+        
+        # Body email
+        body_lines = [
+            f"Xin chào,",
+            f"",
+            f"Khi import file PRODUCTION, có {len(not_found_codes)} mã sản phẩm không tìm thấy trong database.",
+            f"",
+            f"📁 File: {filename}",
+            f"📅 Ngày SX: {ngay_display}",
+            f"👤 Người import: {nguoi_import}",
+            f"⏰ Thời gian: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
+            f"",
+            f"📋 Danh sách mã sản phẩm không tìm thấy:",
+            f"{'=' * 40}",
+        ]
+        
+        for idx, code in enumerate(not_found_codes, 1):
+            body_lines.append(f"   {idx}. {code}")
+        
+        body_lines.extend([
+            f"{'=' * 40}",
+            f"",
+            f"Vui lòng thêm các sản phẩm này vào bảng SanPham trong database để import đầy đủ.",
+            f"",
+            f"Trân trọng,",
+            f"Hệ thống KHSX B7"
+        ])
+        
+        body = "\n".join(body_lines)
+        
+        # Gửi email
+        try:
+            send_outlook_email(
+                recipients=["phinho@cp.com.vn"],
+                subject=subject,
+                body=body,
+                preferred_sender="phinho@cp.com.vn"
+            )
+            print(f"📧 Đã gửi email thông báo về {len(not_found_codes)} mã SP chưa có dữ liệu tới phinho@cp.com.vn")
+            return True
+        except Exception as e:
+            print(f"❌ Lỗi gửi email: {e}")
+            return False
+    
     def _delete_old_import(self, filename: str, ngay_san_xuat: str):
         """
         Xóa dữ liệu import cũ trước khi import lại
@@ -135,19 +224,52 @@ class ProductionImporter:
         conn.commit()
         conn.close()
     
-    def _get_product_id(self, cursor, code_cam: str) -> Optional[int]:
-        """Tìm ID sản phẩm từ Code cám"""
-        # Loại bỏ dấu * ở cuối mã (ví dụ: 312101* -> 312101)
-        cleaned_code = code_cam.strip().rstrip('*')
+    def _get_product_id(self, cursor, code_cam: str, ten_cam: str = None) -> Optional[int]:
+        """Tìm ID sản phẩm từ Code cám và Tên cám
         
-        cursor.execute("""
-            SELECT ID 
-            FROM SanPham 
-            WHERE TRIM([Code cám]) = ? AND [Đã xóa] = 0
-        """, (cleaned_code,))
+        Ưu tiên tìm kiếm:
+        1. Khớp chính xác cả Code cám VÀ Tên cám (cho trường hợp nhiều SP cùng Code)
+        2. Khớp theo Tên cám
+        3. Khớp theo Code cám
+        """
+        # Loại bỏ dấu * ở cuối mã
+        cleaned_code = code_cam.strip().rstrip('*') if code_cam else ""
+        cleaned_ten = ten_cam.strip() if ten_cam else ""
         
-        result = cursor.fetchone()
-        return result[0] if result else None
+        # 1. Thử tìm theo cả Code cám VÀ Tên cám
+        if cleaned_code and cleaned_ten:
+            cursor.execute("""
+                SELECT ID 
+                FROM SanPham 
+                WHERE TRIM([Code cám]) = ? AND UPPER(TRIM([Tên cám])) = UPPER(?) AND [Đã xóa] = 0
+            """, (cleaned_code, cleaned_ten))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+        
+        # 2. Thử tìm theo Tên cám (ưu tiên vì Tên cám unique)
+        if cleaned_ten:
+            cursor.execute("""
+                SELECT ID 
+                FROM SanPham 
+                WHERE UPPER(TRIM([Tên cám])) = UPPER(?) AND [Đã xóa] = 0
+            """, (cleaned_ten,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+        
+        # 3. Fallback: Tìm theo Code cám
+        if cleaned_code:
+            cursor.execute("""
+                SELECT ID 
+                FROM SanPham 
+                WHERE TRIM([Code cám]) = ? AND [Đã xóa] = 0
+            """, (cleaned_code,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+        
+        return None
     
     def _generate_mixer_code(self, cursor) -> str:
         """Tạo mã Mixer tự động (MX00001, MX00002...)"""
@@ -462,8 +584,8 @@ class ProductionImporter:
         
         for item in products:
             try:
-                # Tìm ID sản phẩm
-                id_sanpham = self._get_product_id(cursor, item['code_cam'])
+                # Tìm ID sản phẩm - truyền cả code_cam và description
+                id_sanpham = self._get_product_id(cursor, item['code_cam'], item.get('description', ''))
                 
                 if not id_sanpham:
                     # Bỏ qua mã trong danh sách IGNORED_CODES
@@ -741,8 +863,8 @@ class ProductionImporter:
         
         for item in products:
             try:
-                # Tìm ID sản phẩm
-                id_sanpham = self._get_product_id(cursor, item['code_cam'])
+                # Tìm ID sản phẩm - truyền cả code_cam và ten_cam
+                id_sanpham = self._get_product_id(cursor, item['code_cam'], item.get('ten_cam', ''))
                 
                 if not id_sanpham:
                     # Bỏ qua mã trong danh sách IGNORED_CODES

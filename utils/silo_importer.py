@@ -18,13 +18,28 @@ class SiloImporter:
     # Default file path
     DEFAULT_FILE = "EXCEL/SILO W3-12-17-01-2026.xlsm"
     
-    # Column mapping (0-indexed)
+    # ===== Column mapping for .XLSM files (with VBA macro) =====
+    # Dữ liệu đã được xử lý bởi VBA, nằm ở cột L, M, N
     COL_NGAY_LAY = 11     # Cột L - Ngày lấy cám
     COL_TEN_CAM = 12      # Cột M - Tên cám
     COL_SO_LUONG = 13     # Cột N - Số lượng cám cần lấy
     
-    # Start row (0-indexed, data starts from row 3 in Excel = row 2 in pandas)
+    # Start row for .xlsm (0-indexed, data starts from row 3 in Excel = row 2 in pandas)
     START_ROW = 2
+    
+    # ===== Column mapping for .XLSX files (without VBA macro) =====
+    # Đọc trực tiếp từ dữ liệu gốc theo logic VBA:
+    # - Cột A (index 0): Tên cám
+    # - Cột C-I (index 2-8): Số lượng theo từng ngày (tối đa 7 ngày, bao gồm Chủ nhật)
+    # - Dòng 5 (index 4): Chứa ngày của mỗi cột
+    # - Dòng 6-70 (index 5-69): Dữ liệu
+    XLSX_COL_TEN_CAM = 0           # Cột A - Tên cám
+    XLSX_COL_SO_LUONG_START = 2    # Cột C (bắt đầu)
+    XLSX_COL_SO_LUONG_END = 8      # Cột I (kết thúc) - 7 ngày bao gồm Chủ nhật
+    XLSX_ROW_DATES = 4             # Dòng 5 (0-indexed = 4) chứa ngày
+    XLSX_START_ROW = 5             # Dòng 6 (0-indexed = 5) bắt đầu dữ liệu
+    XLSX_END_ROW = 69              # Dòng 70 (0-indexed = 69)
+    XLSX_MIN_QUANTITY = 99         # Số lượng tối thiểu > 99
     
     def __init__(self, db_path: str = "database_new.db"):
         """
@@ -38,6 +53,70 @@ class SiloImporter:
     def _get_connection(self):
         """Tạo connection đến database"""
         return sqlite3.connect(self.db_path)
+    
+    def _is_xlsx_file(self, file_path: str | Path) -> bool:
+        """Kiểm tra file có phải là .xlsx (không có VBA) hay không"""
+        path_str = str(file_path).lower()
+        return path_str.endswith('.xlsx')
+    
+    def _detect_week_column_range(self, df: pd.DataFrame) -> int:
+        """
+        Tự động phát hiện cột kết thúc dựa trên ngày trong header (dòng 5).
+        
+        Logic:
+        - Nếu C5 là Chủ nhật (weekday=6) hoặc I5 có ngày → tuần có 7 ngày (C-I)
+        - Nếu C5 là Thứ 2 và H5 là Thứ 7 → tuần có 6 ngày (C-H)
+        
+        Returns:
+            int: Column index kết thúc (7 cho H, 8 cho I)
+        """
+        if self.XLSX_ROW_DATES >= len(df):
+            return self.XLSX_COL_SO_LUONG_END  # Mặc định
+        
+        dates_row = df.iloc[self.XLSX_ROW_DATES]
+        
+        # Kiểm tra cột C (index 2) - ngày đầu tiên
+        col_c_date = dates_row[2] if 2 < len(dates_row) else None
+        
+        # Kiểm tra cột I (index 8) - có thể là ngày thứ 7
+        col_i_date = dates_row[8] if 8 < len(dates_row) else None
+        
+        # Kiểm tra cột H (index 7) - ngày thứ 6 hoặc cuối
+        col_h_date = dates_row[7] if 7 < len(dates_row) else None
+        
+        # Nếu cột I có ngày hợp lệ → tuần 7 ngày
+        if pd.notna(col_i_date):
+            try:
+                if isinstance(col_i_date, datetime):
+                    print(f"[DEBUG] Column I has date: {col_i_date} (weekday={col_i_date.weekday()}) → 7 days")
+                    return 8  # Cột I
+                else:
+                    # Thử parse string thành datetime
+                    parsed = pd.to_datetime(col_i_date, errors='coerce')
+                    if pd.notna(parsed):
+                        print(f"[DEBUG] Column I has date: {parsed} → 7 days")
+                        return 8
+            except:
+                pass
+        
+        # Kiểm tra ngày đầu tiên (C5) có phải Chủ nhật không
+        if pd.notna(col_c_date):
+            try:
+                if isinstance(col_c_date, datetime):
+                    if col_c_date.weekday() == 6:  # Chủ nhật
+                        print(f"[DEBUG] Column C is Sunday: {col_c_date} → 7 days")
+                        return 8  # Có Chủ nhật đầu tuần
+                else:
+                    parsed = pd.to_datetime(col_c_date, errors='coerce')
+                    if pd.notna(parsed) and parsed.weekday() == 6:
+                        print(f"[DEBUG] Column C is Sunday: {parsed} → 7 days")
+                        return 8
+            except:
+                pass
+        
+        # Mặc định 6 ngày (C-H)
+        print(f"[DEBUG] Default: 6 days (C-H)")
+        return 7
     
     def get_available_sheets(self, file_path: str | Path = None) -> List[str]:
         """
@@ -58,6 +137,7 @@ class SiloImporter:
     ) -> pd.DataFrame:
         """
         Xem trước dữ liệu từ một sheet
+        Tự động detect loại file và áp dụng logic phù hợp
         """
         if file_path is None:
             file_path = self.DEFAULT_FILE
@@ -71,47 +151,110 @@ class SiloImporter:
         
         try:
             df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Error reading Excel: {e}")
             return pd.DataFrame()
         
+        is_xlsx = self._is_xlsx_file(file_path)
         data = []
-        for idx in range(self.START_ROW, min(len(df), self.START_ROW + limit * 2)):
-            row = df.iloc[idx]
-            
-            ngay_lay = row[self.COL_NGAY_LAY] if self.COL_NGAY_LAY < len(row) else None
-            ten_cam = row[self.COL_TEN_CAM] if self.COL_TEN_CAM < len(row) else None
-            so_luong = row[self.COL_SO_LUONG] if self.COL_SO_LUONG < len(row) else None
-            
-            # Bỏ qua dòng trống
-            if pd.isna(ten_cam) or pd.isna(so_luong):
-                continue
-            
-            # Xử lý số lượng
-            try:
-                so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
-            except (ValueError, TypeError):
-                continue
-            
-            if so_luong_val <= 0:
-                continue
-            
-            # Format ngày lấy
-            ngay_lay_str = ""
-            if pd.notna(ngay_lay):
-                if isinstance(ngay_lay, datetime):
-                    ngay_lay_str = ngay_lay.strftime('%d/%m/%Y')
-                else:
-                    ngay_lay_str = str(ngay_lay)
-                
-            data.append({
-                'Ngày lấy': ngay_lay_str,
-                'Tên cám': str(ten_cam).strip(),
-                'Số lượng (tấn)': so_luong_val
-            })
-            
-            if len(data) >= limit:
-                break
         
+        print(f"[DEBUG] File: {file_path}")
+        print(f"[DEBUG] Sheet: {sheet_name}")
+        print(f"[DEBUG] Is XLSX: {is_xlsx}")
+        print(f"[DEBUG] Total rows: {len(df)}, columns: {len(df.columns)}")
+        
+        if is_xlsx:
+            # Logic cho file .xlsx (không VBA) - đọc trực tiếp như VBA
+            # Tự động phát hiện số cột dựa trên ngày trong header
+            col_end = self._detect_week_column_range(df)
+            dates_row = df.iloc[self.XLSX_ROW_DATES] if self.XLSX_ROW_DATES < len(df) else None
+            
+            print(f"[DEBUG] Detected column range: C to {chr(65 + col_end)} (index 2 to {col_end})")
+            
+            # Duyệt theo thứ tự cột (C đến H hoặc I tùy vào tuần)
+            for col_idx in range(self.XLSX_COL_SO_LUONG_START, col_end + 1):
+                # Lấy ngày của cột này từ dòng 5
+                ngay_lay = dates_row[col_idx] if dates_row is not None and col_idx < len(dates_row) else None
+                ngay_lay_str = ""
+                if pd.notna(ngay_lay):
+                    if isinstance(ngay_lay, datetime):
+                        ngay_lay_str = ngay_lay.strftime('%d/%m/%Y')
+                    else:
+                        ngay_lay_str = str(ngay_lay)
+                
+                # Duyệt qua các dòng 6-70 (index 5-69)
+                for row_idx in range(self.XLSX_START_ROW, min(len(df), self.XLSX_END_ROW + 1)):
+                    row = df.iloc[row_idx]
+                    
+                    # Cột A = Tên cám
+                    ten_cam = row[self.XLSX_COL_TEN_CAM] if self.XLSX_COL_TEN_CAM < len(row) else None
+                    # Cột hiện tại = Số lượng
+                    so_luong = row[col_idx] if col_idx < len(row) else None
+                    
+                    # Bỏ qua dòng trống hoặc không phải số
+                    if pd.isna(ten_cam) or not str(ten_cam).strip():
+                        continue
+                    
+                    # Xử lý số lượng - chỉ lấy nếu > 99 (theo VBA)
+                    try:
+                        so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    if so_luong_val <= self.XLSX_MIN_QUANTITY:
+                        continue
+                    
+                    data.append({
+                        'Ngày lấy': ngay_lay_str,
+                        'Tên cám': str(ten_cam).strip(),
+                        'Số lượng (kg)': so_luong_val
+                    })
+                    
+                    if len(data) >= limit:
+                        break
+                
+                if len(data) >= limit:
+                    break
+        else:
+            # Logic cho file .xlsm (có VBA) - đọc từ cột L, M, N
+            for idx in range(self.START_ROW, min(len(df), self.START_ROW + limit * 2)):
+                row = df.iloc[idx]
+                
+                ngay_lay = row[self.COL_NGAY_LAY] if self.COL_NGAY_LAY < len(row) else None
+                ten_cam = row[self.COL_TEN_CAM] if self.COL_TEN_CAM < len(row) else None
+                so_luong = row[self.COL_SO_LUONG] if self.COL_SO_LUONG < len(row) else None
+                
+                # Bỏ qua dòng trống
+                if pd.isna(ten_cam) or pd.isna(so_luong):
+                    continue
+                
+                # Xử lý số lượng
+                try:
+                    so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
+                except (ValueError, TypeError):
+                    continue
+                
+                if so_luong_val <= 0:
+                    continue
+                
+                # Format ngày lấy
+                ngay_lay_str = ""
+                if pd.notna(ngay_lay):
+                    if isinstance(ngay_lay, datetime):
+                        ngay_lay_str = ngay_lay.strftime('%d/%m/%Y')
+                    else:
+                        ngay_lay_str = str(ngay_lay)
+                    
+                data.append({
+                    'Ngày lấy': ngay_lay_str,
+                    'Tên cám': str(ten_cam).strip(),
+                    'Số lượng (kg)': so_luong_val
+                })
+                
+                if len(data) >= limit:
+                    break
+        
+        print(f"[DEBUG] Data found: {len(data)}")
         return pd.DataFrame(data)
     
     def _read_sheet_data(
@@ -121,53 +264,106 @@ class SiloImporter:
     ) -> List[Dict]:
         """
         Đọc toàn bộ dữ liệu từ một sheet - mỗi dòng là 1 bản ghi riêng biệt
+        Tự động detect loại file và áp dụng logic phù hợp
         """
         try:
             df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
         except Exception:
             return []
         
+        is_xlsx = self._is_xlsx_file(file_path)
         data = []
         
-        for idx in range(self.START_ROW, len(df)):
-            row = df.iloc[idx]
+        if is_xlsx:
+            # Logic cho file .xlsx (không VBA) - đọc trực tiếp như VBA
+            # Tự động phát hiện số cột dựa trên ngày trong header
+            col_end = self._detect_week_column_range(df)
+            dates_row = df.iloc[self.XLSX_ROW_DATES] if self.XLSX_ROW_DATES < len(df) else None
             
-            ngay_lay = row[self.COL_NGAY_LAY] if self.COL_NGAY_LAY < len(row) else None
-            ten_cam = row[self.COL_TEN_CAM] if self.COL_TEN_CAM < len(row) else None
-            so_luong = row[self.COL_SO_LUONG] if self.COL_SO_LUONG < len(row) else None
-            
-            # Bỏ qua dòng trống
-            if pd.isna(ten_cam) or pd.isna(so_luong):
-                continue
-            
-            # Parse số lượng (đơn vị tấn)
-            try:
-                so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
-            except (ValueError, TypeError):
-                continue
-            
-            if so_luong_val <= 0:
-                continue
-            
-            ten_cam_clean = str(ten_cam).strip()
-            
-            # Format ngày lấy thành YYYY-MM-DD
-            ngay_lay_str = None
-            if pd.notna(ngay_lay):
-                if isinstance(ngay_lay, datetime):
-                    ngay_lay_str = ngay_lay.strftime('%Y-%m-%d')
-                else:
+            # Duyệt theo thứ tự cột (C đến H hoặc I tùy vào tuần)
+            for col_idx in range(self.XLSX_COL_SO_LUONG_START, col_end + 1):
+                # Lấy ngày của cột này từ dòng 5
+                ngay_lay = dates_row[col_idx] if dates_row is not None and col_idx < len(dates_row) else None
+                ngay_lay_str = None
+                if pd.notna(ngay_lay):
+                    if isinstance(ngay_lay, datetime):
+                        ngay_lay_str = ngay_lay.strftime('%Y-%m-%d')
+                    else:
+                        try:
+                            ngay_lay_str = str(ngay_lay)
+                        except:
+                            pass
+                
+                # Duyệt qua các dòng 6-70 (index 5-69)
+                for row_idx in range(self.XLSX_START_ROW, min(len(df), self.XLSX_END_ROW + 1)):
+                    row = df.iloc[row_idx]
+                    
+                    # Cột A = Tên cám
+                    ten_cam = row[self.XLSX_COL_TEN_CAM] if self.XLSX_COL_TEN_CAM < len(row) else None
+                    # Cột hiện tại = Số lượng
+                    so_luong = row[col_idx] if col_idx < len(row) else None
+                    
+                    # Bỏ qua dòng trống hoặc không phải số
+                    if pd.isna(ten_cam) or not str(ten_cam).strip():
+                        continue
+                    
+                    # Xử lý số lượng - chỉ lấy nếu > 99 (theo VBA)
                     try:
-                        ngay_lay_str = str(ngay_lay)
-                    except:
-                        pass
-            
-            # Thêm trực tiếp vào list, không gộp
-            data.append({
-                'ten_cam': ten_cam_clean,
-                'ngay_lay': ngay_lay_str,
-                'so_luong': so_luong_val
-            })
+                        so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    if so_luong_val <= self.XLSX_MIN_QUANTITY:
+                        continue
+                    
+                    ten_cam_clean = str(ten_cam).strip()
+                    
+                    data.append({
+                        'ten_cam': ten_cam_clean,
+                        'ngay_lay': ngay_lay_str,
+                        'so_luong': so_luong_val
+                    })
+        else:
+            # Logic cho file .xlsm (có VBA) - đọc từ cột L, M, N
+            for idx in range(self.START_ROW, len(df)):
+                row = df.iloc[idx]
+                
+                ngay_lay = row[self.COL_NGAY_LAY] if self.COL_NGAY_LAY < len(row) else None
+                ten_cam = row[self.COL_TEN_CAM] if self.COL_TEN_CAM < len(row) else None
+                so_luong = row[self.COL_SO_LUONG] if self.COL_SO_LUONG < len(row) else None
+                
+                # Bỏ qua dòng trống
+                if pd.isna(ten_cam) or pd.isna(so_luong):
+                    continue
+                
+                # Parse số lượng (đơn vị tấn)
+                try:
+                    so_luong_val = float(so_luong) if pd.notna(so_luong) else 0
+                except (ValueError, TypeError):
+                    continue
+                
+                if so_luong_val <= 0:
+                    continue
+                
+                ten_cam_clean = str(ten_cam).strip()
+                
+                # Format ngày lấy thành YYYY-MM-DD
+                ngay_lay_str = None
+                if pd.notna(ngay_lay):
+                    if isinstance(ngay_lay, datetime):
+                        ngay_lay_str = ngay_lay.strftime('%Y-%m-%d')
+                    else:
+                        try:
+                            ngay_lay_str = str(ngay_lay)
+                        except:
+                            pass
+                
+                # Thêm trực tiếp vào list, không gộp
+                data.append({
+                    'ten_cam': ten_cam_clean,
+                    'ngay_lay': ngay_lay_str,
+                    'so_luong': so_luong_val
+                })
         
         return data
     

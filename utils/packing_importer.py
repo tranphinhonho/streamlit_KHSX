@@ -57,6 +57,34 @@ class PackingImporter:
         day_sheets = [s for s in xl.sheet_names if s.isdigit()]
         return sorted(day_sheets, key=lambda x: int(x))
     
+    def get_excel_total(
+        self, 
+        file_path: str | Path = None, 
+        sheet_name: str = "1"
+    ) -> Optional[float]:
+        """
+        Lấy giá trị tổng sản lượng từ ô P2 trong Excel
+        
+        Args:
+            file_path: Đường dẫn file Excel
+            sheet_name: Tên sheet (ngày)
+            
+        Returns:
+            Giá trị tổng từ ô P2 hoặc None nếu không có
+        """
+        if file_path is None:
+            file_path = self.DEFAULT_FILE
+        
+        try:
+            df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+            # Ô P2 = row index 1, column index 15
+            value = df.iloc[1, 15]
+            if pd.notna(value):
+                return float(value)
+            return None
+        except Exception:
+            return None
+    
     def preview_data(
         self, 
         file_path: str | Path = None, 
@@ -85,7 +113,8 @@ class PackingImporter:
         
         # Lấy các cột cần thiết
         data = []
-        for idx in range(self.START_ROW, min(len(df), self.START_ROW + limit)):
+        end_row = len(df) if limit is None else min(len(df), self.START_ROW + limit)
+        for idx in range(self.START_ROW, end_row):
             row = df.iloc[idx]
             
             ten_cam = row[self.COL_TEN_CAM]
@@ -103,17 +132,41 @@ class PackingImporter:
             except (ValueError, TypeError):
                 kich_co_bao_val = str(kich_co_bao) if pd.notna(kich_co_bao) else ""
             
-            # Xử lý số lượng bao
+            # Xử lý số lượng bao - có thể bị định dạng Date trong Excel
             try:
-                so_luong_bao_val = int(so_luong_bao) if pd.notna(so_luong_bao) else 0
+                if pd.notna(so_luong_bao):
+                    # Nếu là datetime, chuyển thành Excel serial number
+                    if hasattr(so_luong_bao, 'toordinal'):
+                        # datetime object - convert to Excel serial
+                        so_luong_bao_val = int((so_luong_bao - pd.Timestamp('1899-12-31')).days)
+                    elif isinstance(so_luong_bao, (int, float)):
+                        so_luong_bao_val = int(so_luong_bao)
+                    else:
+                        so_luong_bao_val = int(float(str(so_luong_bao)))
+                else:
+                    so_luong_bao_val = 0
             except (ValueError, TypeError):
                 so_luong_bao_val = 0
+            
+            # Xử lý số lượng kg - có thể bị định dạng Date trong Excel
+            try:
+                if pd.notna(so_luong_kg):
+                    if hasattr(so_luong_kg, 'toordinal'):
+                        so_luong_kg_val = int((so_luong_kg - pd.Timestamp('1899-12-31')).days)
+                    elif isinstance(so_luong_kg, (int, float)):
+                        so_luong_kg_val = float(so_luong_kg)
+                    else:
+                        so_luong_kg_val = float(str(so_luong_kg))
+                else:
+                    so_luong_kg_val = 0
+            except (ValueError, TypeError):
+                so_luong_kg_val = 0
                 
             data.append({
                 'Tên cám': str(ten_cam).strip(),
                 'Kích cỡ bao (kg)': kich_co_bao_val,
                 'Số lượng bao': so_luong_bao_val,
-                'Số lượng (kg)': so_luong_kg
+                'Số lượng (kg)': so_luong_kg_val
             })
         
         return pd.DataFrame(data)
@@ -146,12 +199,33 @@ class PackingImporter:
             if pd.isna(ten_cam) or pd.isna(so_luong_kg):
                 continue
             
-            # Parse số lượng
+            # Parse số lượng kg - xử lý trường hợp Date format
             try:
-                so_luong_kg_val = float(so_luong_kg) if pd.notna(so_luong_kg) else 0
-                so_luong_bao_val = int(so_luong_bao) if pd.notna(so_luong_bao) else 0
+                if pd.notna(so_luong_kg):
+                    if hasattr(so_luong_kg, 'toordinal'):
+                        so_luong_kg_val = float((so_luong_kg - pd.Timestamp('1899-12-31')).days)
+                    elif isinstance(so_luong_kg, (int, float)):
+                        so_luong_kg_val = float(so_luong_kg)
+                    else:
+                        so_luong_kg_val = float(str(so_luong_kg))
+                else:
+                    so_luong_kg_val = 0
             except (ValueError, TypeError):
                 continue
+            
+            # Parse số lượng bao - xử lý trường hợp Date format
+            try:
+                if pd.notna(so_luong_bao):
+                    if hasattr(so_luong_bao, 'toordinal'):
+                        so_luong_bao_val = int((so_luong_bao - pd.Timestamp('1899-12-31')).days)
+                    elif isinstance(so_luong_bao, (int, float)):
+                        so_luong_bao_val = int(so_luong_bao)
+                    else:
+                        so_luong_bao_val = int(float(str(so_luong_bao)))
+                else:
+                    so_luong_bao_val = 0
+            except (ValueError, TypeError):
+                so_luong_bao_val = 0
             
             if so_luong_kg_val <= 0:
                 continue

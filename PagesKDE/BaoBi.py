@@ -29,7 +29,7 @@ def app(selected):
             help="Chọn ngày cần kiểm tra tồn kho"
         )
         
-        if st.button("🔍 Kiểm tra tồn kho", type="primary", use_container_width=True):
+        if st.button("🔍 Kiểm tra tồn kho", type="primary", width="stretch"):
             with st.spinner("Đang kiểm tra..."):
                 kiem_tra = kiem_tra_ton_kho(ngay_kiem_tra)
                 
@@ -203,7 +203,21 @@ def app(selected):
                 st.session_state.bagstock_filter_date = None
                 st.rerun()
         else:
-            default_date = fn.get_vietnam_time().date()
+            # Lấy ngày gần nhất có dữ liệu trong BagStock
+            try:
+                conn_check = sqlite3.connect('database_new.db')
+                cursor = conn_check.cursor()
+                cursor.execute("SELECT MAX(NgayStock) FROM BagStock WHERE DaXoa = 0")
+                latest = cursor.fetchone()[0]
+                conn_check.close()
+                
+                if latest:
+                    parts = latest.split('-')
+                    default_date = date(int(parts[0]), int(parts[1]), int(parts[2]))
+                else:
+                    default_date = fn.get_vietnam_time().date()
+            except:
+                default_date = fn.get_vietnam_time().date()
         
         # Chọn ngày và tìm kiếm
         col1, col2, col3 = st.columns([2, 2, 1])
@@ -223,11 +237,12 @@ def app(selected):
         
         with col3:
             st.write("")
-            btn_load = st.button("🔍 Xem dữ liệu", type="primary", use_container_width=True)
+            btn_refresh = st.button("🔄 Làm mới", type="secondary", width="stretch")
         
-        # Auto-load khi từ Lịch tháng hoặc có search term
+        # Auto-load dữ liệu mặc định (luôn hiển thị)
         from_lichthang = 'bagstock_filter_date' in st.session_state and st.session_state.bagstock_filter_date
-        if btn_load or from_lichthang or search_term:
+        # Luôn load dữ liệu - True by default
+        if True:
             conn = sqlite3.connect('database_new.db')
             
             # Query với điều kiện tìm kiếm
@@ -285,7 +300,7 @@ def app(selected):
                     # Bảng dữ liệu
                     st.dataframe(
                         df_bagstock,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         column_config={
                             'Số lượng bao': st.column_config.NumberColumn(
@@ -514,7 +529,7 @@ def hien_thi_canh_bao(data, ngay):
             df_display = data['muc_2'].copy()
             df_display['Loại bao'] = df_display['Kích cỡ (kg)'].apply(lambda x: f"Bao {int(x)}kg")
             st.dataframe(df_display[['Loại bao', 'Tồn kho hiện tại', 'Nhu cầu dự kiến', 'Số lượng thiếu']], 
-                        use_container_width=True, hide_index=True)
+                        width="stretch", hide_index=True)
     
     if len(data['muc_3']) > 0:
         with st.expander("🟡 MỨC 3: TỒN KHO TRUNG BÌNH (501-2,000 bao)", expanded=False):
@@ -522,7 +537,7 @@ def hien_thi_canh_bao(data, ngay):
             df_display = data['muc_3'].copy()
             df_display['Loại bao'] = df_display['Kích cỡ (kg)'].apply(lambda x: f"Bao {int(x)}kg")
             st.dataframe(df_display[['Loại bao', 'Tồn kho hiện tại', 'Nhu cầu dự kiến']], 
-                        use_container_width=True, hide_index=True)
+                        width="stretch", hide_index=True)
     
     if len(data['muc_4']) > 0:
         with st.expander("✅ MỨC 4: TỒN KHO AN TOÀN (>2,000 bao)", expanded=False):
@@ -530,7 +545,7 @@ def hien_thi_canh_bao(data, ngay):
             df_display = data['muc_4'].copy()
             df_display['Loại bao'] = df_display['Kích cỡ (kg)'].apply(lambda x: f"Bao {int(x)}kg")
             st.dataframe(df_display[['Loại bao', 'Tồn kho hiện tại', 'Nhu cầu dự kiến']], 
-                        use_container_width=True, hide_index=True)
+                        width="stretch", hide_index=True)
     
     # Biểu đồ tổng quan
     st.subheader("📊 Biểu đồ tồn kho theo kích cỡ")

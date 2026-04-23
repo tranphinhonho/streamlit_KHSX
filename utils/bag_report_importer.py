@@ -169,6 +169,73 @@ class BagReportImporter:
             return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
         return None
     
+    def preview_data(
+        self, 
+        file_path: str | Path,
+        limit: int = 20
+    ) -> Optional[pd.DataFrame]:
+        """
+        Preview dữ liệu trong file BAG REPORT trước khi import
+        
+        Args:
+            file_path: Đường dẫn file Excel
+            limit: Số dòng tối đa hiển thị
+            
+        Returns:
+            DataFrame preview hoặc None nếu lỗi
+        """
+        file_path = Path(file_path)
+        
+        try:
+            # Đọc sheet MAP
+            df = pd.read_excel(
+                file_path,
+                sheet_name=self.SHEET_MAP,
+                header=None,
+                skiprows=self.START_ROW
+            )
+            
+            data = []
+            for idx, row in df.iterrows():
+                if idx >= limit:
+                    break
+                    
+                # Lấy tên cám
+                ten_cam = row.iloc[self.COL_MAPPING['ten_cam']]
+                if pd.isna(ten_cam) or str(ten_cam).strip() == "":
+                    continue
+                ten_cam = str(ten_cam).strip()
+                
+                # Lấy kích cỡ đóng bao
+                kich_co_bao = row.iloc[self.COL_MAPPING['kich_co_bao']]
+                try:
+                    kich_co_bao = int(float(kich_co_bao))
+                except:
+                    kich_co_bao = 0
+                
+                # Lấy số lượng
+                so_luong = row.iloc[self.COL_MAPPING['so_luong']]
+                try:
+                    so_luong = int(float(so_luong))
+                except:
+                    so_luong = 0
+                
+                if so_luong > 0:
+                    data.append({
+                        'Tên cám': ten_cam,
+                        'Kích cỡ (kg)': kich_co_bao,
+                        'Số lượng': so_luong
+                    })
+            
+            if not data:
+                return None
+            
+            return pd.DataFrame(data)
+            
+        except Exception as e:
+            print(f"❌ Lỗi preview: {e}")
+            return None
+    
     def import_bag_report(
         self,
         file_path: str | Path,

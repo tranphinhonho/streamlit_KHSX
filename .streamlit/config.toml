@@ -5,6 +5,12 @@ runOnSave = true
 # Cổng mặc định
 port = 8501
 
+# Bind to all interfaces (cần cho Render)
+address = "0.0.0.0"
+
+# Headless mode (không mở browser tự động trên server)
+headless = true
+
 # Tắt file watcher để tránh lỗi "Paths don't have the same drive"
 fileWatcherType = "none"
 

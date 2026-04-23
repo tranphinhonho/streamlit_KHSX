@@ -44,7 +44,7 @@ def app(selected):
         with col2:
             st.metric("Số line đóng bao", "8 lines", help="Packing 1-8")
         
-        if st.button("🔄 Tạo kế hoạch đóng bao", type="primary", use_container_width=True):
+        if st.button("🔄 Tạo kế hoạch đóng bao", type="primary", width="stretch"):
             with st.spinner("Đang tạo kế hoạch..."):
                 ke_hoach = tao_ke_hoach_packing(ngay_packing)
                 
@@ -288,7 +288,7 @@ def hien_thi_ke_hoach_packing(data, ngay_packing):
                 st.metric("Tổng số bao", f"{df_line['Số bao'].sum():,} bao")
             
             # Bảng chi tiết
-            st.dataframe(df_line, use_container_width=True, hide_index=True)
+            st.dataframe(df_line, width="stretch", hide_index=True)
     
     # Biểu đồ phân bố
     st.subheader("📈 Phân bố sản lượng theo Line")
@@ -302,7 +302,7 @@ def hien_thi_ke_hoach_packing(data, ngay_packing):
     st.bar_chart(line_summary.set_index('Line đóng bao')['Số lượng (tấn)'])
     
     # Nút lưu
-    if st.button("💾 Lưu kế hoạch đóng bao", type="primary", use_container_width=True):
+    if st.button("💾 Lưu kế hoạch đóng bao", type="primary", width="stretch"):
         luu_ke_hoach_packing(data['ke_hoach'], ngay_packing)
 
 
