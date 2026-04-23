@@ -244,7 +244,10 @@ if authentication_status:
 
         import importlib
         from admin import sys_QuanLyNguoiDung, sys_VaiTro,sys_ChucNangTheoVaiTro,sys_TaoBang, sys_ChucNangChinh, sys_DanhSachChucNang, sys_LienKetModule, sys_Settings
-        from admin import sys_LuuGoogleDrive, sys_KhoiPhucDatabase, sys_ClearDataTable, sys_SQLStructure, sys_DownloadDatabase, sys_BackupDatabase
+        try:
+            from admin import sys_LuuGoogleDrive, sys_KhoiPhucDatabase, sys_ClearDataTable, sys_SQLStructure, sys_DownloadDatabase, sys_BackupDatabase
+        except ImportError:
+            sys_LuuGoogleDrive = sys_KhoiPhucDatabase = sys_ClearDataTable = sys_SQLStructure = sys_DownloadDatabase = sys_BackupDatabase = None
 
         if choose == 'Admin KDE':
             if selected_tab =="Tạo bảng":
@@ -264,17 +267,23 @@ if authentication_status:
             elif selected_tab == 'Cài đặt':
                 sys_Settings.app(selected_tab)
             elif selected_tab == 'Clear Data Table':
-                sys_ClearDataTable.app(selected_tab)
+                if sys_ClearDataTable: sys_ClearDataTable.app(selected_tab)
+                else: st.warning('Chức năng này không khả dụng trên Cloud.')
             elif selected_tab == "Cấu trúc SQL":
-                sys_SQLStructure.app(selected_tab)
+                if sys_SQLStructure: sys_SQLStructure.app(selected_tab)
+                else: st.warning('Chức năng này không khả dụng trên Cloud.')
             elif selected_tab == "Download Database":
-                sys_DownloadDatabase.app(selected_tab)
+                if sys_DownloadDatabase: sys_DownloadDatabase.app(selected_tab)
+                else: st.warning('Chức năng này không khả dụng trên Cloud.')
             elif selected_tab == 'Backup Database':
-                sys_BackupDatabase.app(selected_tab)
+                if sys_BackupDatabase: sys_BackupDatabase.app(selected_tab)
+                else: st.warning('Chức năng này không khả dụng trên Cloud.')
             elif selected_tab == 'Lưu vào Google Drive':
-                sys_LuuGoogleDrive.app(selected_tab)
+                if sys_LuuGoogleDrive: sys_LuuGoogleDrive.app(selected_tab)
+                else: st.warning('Chức năng này không khả dụng trên Cloud.')
             elif selected_tab == 'Khôi phục Database':
-                sys_KhoiPhucDatabase.app(selected_tab)
+                if sys_KhoiPhucDatabase: sys_KhoiPhucDatabase.app(selected_tab)
+                else: st.warning('Chức năng này không khả dụng trên Cloud.')
         else:
             # Cơ chế động cho các chức năng khác
             sql_get_module = f"""
