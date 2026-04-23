@@ -1679,21 +1679,15 @@ def app(selected):
     st.header("2. Danh sách đơn đặt hàng hiện tại")
     
     # Bộ lọc và xóa theo Ngày lấy
-    import sqlite3
     col_filter1, col_filter2, col_filter3 = st.columns([2, 2, 1])
     
     with col_filter1:
         # Lấy danh sách ngày lấy có trong database
-        conn_ngaylay = sqlite3.connect('database_new.db')
-        cursor_ngaylay = conn_ngaylay.cursor()
-        cursor_ngaylay.execute("""
-            SELECT DISTINCT [Ngày lấy] 
-            FROM DatHang 
-            WHERE [Đã xóa] = 0 AND [Ngày lấy] IS NOT NULL
-            ORDER BY [Ngày lấy] DESC
-        """)
-        ngay_lay_list = ['Tất cả'] + [row[0] for row in cursor_ngaylay.fetchall() if row[0]]
-        conn_ngaylay.close()
+        ngay_lay_result = ss.query_database_sqlite(
+            sql_string="SELECT DISTINCT [Ngày lấy] FROM [DatHang] WHERE [Đã xóa] = 0 AND [Ngày lấy] IS NOT NULL ORDER BY [Ngày lấy] DESC",
+            data_type='list'
+        )
+        ngay_lay_list = ['Tất cả'] + (ngay_lay_result if ngay_lay_result else [])
         
         selected_ngay_lay = st.selectbox(
             "🔍 Lọc theo Ngày lấy",
@@ -1708,17 +1702,10 @@ def app(selected):
     with col_filter3:
         if selected_ngay_lay != 'Tất cả':
             if st.button("🗑️ Xóa tất cả", type="secondary", key="btn_delete_by_ngaylay"):
-                conn_del = sqlite3.connect('database_new.db')
-                cursor_del = conn_del.cursor()
-                cursor_del.execute("""
-                    UPDATE DatHang 
-                    SET [Đã xóa] = 1, [Người sửa] = ?, [Thời gian sửa] = ?
-                    WHERE [Đã xóa] = 0 AND [Ngày lấy] = ?
-                """, (st.session_state.username, fn.get_vietnam_time().strftime('%Y-%m-%d %H:%M:%S'), selected_ngay_lay))
-                deleted_count = cursor_del.rowcount
-                conn_del.commit()
-                conn_del.close()
-                st.success(f"✅ Đã xóa **{deleted_count}** đơn hàng có Ngày lấy = **{selected_ngay_lay}**")
+                thoi_gian_sua = fn.get_vietnam_time().strftime('%Y-%m-%d %H:%M:%S')
+                delete_sql = f"UPDATE [DatHang] SET [Đã xóa] = 1, [Người sửa] = '{st.session_state.username}', [Thời gian sửa] = '{thoi_gian_sua}' WHERE [Đã xóa] = 0 AND [Ngày lấy] = '{selected_ngay_lay}'"
+                ss.query_database_sqlite(sql_string=delete_sql)
+                st.success(f"✅ Đã xóa đơn hàng có Ngày lấy = **{selected_ngay_lay}**")
                 st.session_state.df_key += 1
                 st.rerun()
     
