@@ -90,6 +90,18 @@ def adapt_sql(sql):
     result = result.replace('IFNULL(', 'COALESCE(')
     result = result.replace('ifnull(', 'COALESCE(')
     
+    # Thay strftime('%d', col) → EXTRACT(DAY FROM col) cho PostgreSQL
+    result = re.sub(
+        r"CAST\(strftime\('%d',\s*(.+?)\)\s*AS\s+INTEGER\)",
+        r"CAST(EXTRACT(DAY FROM \1) AS INTEGER)",
+        result
+    )
+    result = re.sub(
+        r"strftime\('([^']+)',\s*(.+?)\)",
+        lambda m: _convert_strftime(m.group(1), m.group(2)),
+        result
+    )
+    
     # Thay || (string concat) - giữ nguyên vì PostgreSQL cũng dùng ||
     
     # Thay DATETIME DEFAULT CURRENT_TIMESTAMP → TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -101,7 +113,67 @@ def adapt_sql(sql):
     result = result.replace(' REAL', ' DOUBLE PRECISION')
     result = result.replace(' NUMERIC', ' NUMERIC')
     
+    # Auto-quote unquoted table names cho PostgreSQL (case-sensitive)
+    # Danh sách tất cả bảng trong app
+    known_tables = [
+        'DonViTinh', 'SanPham', 'DatHang', 'StockHomNay', 'StockOld',
+        'Packing', 'PackingPlan', 'Sale', 'Plan', 'Pellet', 'PelletPlan',
+        'PelletCapacity', 'PelletReportStatus', 'BaoBi', 'BagStock',
+        'Forecast', 'Mixer', 'TonBon', 'Testcan', 'TestCan_Reports',
+        'EmailImportLog', 'MasterdataLoss',
+        'tbsys_Users', 'tbsys_VaiTro', 'tbsys_ChucNangChinh',
+        'tbsys_DanhSachChucNang', 'tbsys_ChucNangTheoVaiTro',
+        'tbsys_config', 'tbsys_ModuleChucNang',
+        'tbsys_LichSuBackupDatabase', 'tbsys_Logs', 'sysdiagrams'
+    ]
+    
+    for table in known_tables:
+        # Quote unquoted table names after FROM, JOIN, INTO, UPDATE, TABLE keywords
+        # Only if not already quoted with " or [
+        result = re.sub(
+            r'(\bFROM\s+)' + re.escape(table) + r'(\b)',
+            r'\1"' + table + r'"\2',
+            result
+        )
+        result = re.sub(
+            r'(\bJOIN\s+)' + re.escape(table) + r'(\b)',
+            r'\1"' + table + r'"\2',
+            result
+        )
+        result = re.sub(
+            r'(\bINTO\s+)' + re.escape(table) + r'(\b)',
+            r'\1"' + table + r'"\2',
+            result
+        )
+        result = re.sub(
+            r'(\bUPDATE\s+)' + re.escape(table) + r'(\b)',
+            r'\1"' + table + r'"\2',
+            result
+        )
+    
+    # Thay TRIM([col]) - PostgreSQL cũng hỗ trợ TRIM
+    
     return result
+
+
+def _convert_strftime(fmt, col):
+    """Chuyển đổi strftime SQLite sang PostgreSQL EXTRACT/TO_CHAR."""
+    if fmt == '%d':
+        return f"EXTRACT(DAY FROM {col})"
+    elif fmt == '%m':
+        return f"EXTRACT(MONTH FROM {col})"
+    elif fmt == '%Y':
+        return f"EXTRACT(YEAR FROM {col})"
+    elif fmt == '%H':
+        return f"EXTRACT(HOUR FROM {col})"
+    elif fmt == '%M':
+        return f"EXTRACT(MINUTE FROM {col})"
+    elif fmt == '%Y-%m-%d':
+        return f"TO_CHAR({col}, 'YYYY-MM-DD')"
+    elif fmt == '%Y-%m-%d %H:%M:%S':
+        return f"TO_CHAR({col}, 'YYYY-MM-DD HH24:MI:SS')"
+    else:
+        return f"TO_CHAR({col}, '{fmt}')"
 
 
 def adapt_placeholder(sql):

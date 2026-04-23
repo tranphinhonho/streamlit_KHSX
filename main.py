@@ -144,7 +144,7 @@ if authentication_status:
     id_chucnangs = []
     try:
         # st.session_state.mavaitro = sp.execute_sql()[0][0]
-        sql =  f"SELECT ID_VaiTro from tbsys_Users where Username = '{st.session_state.username}'"
+        sql =  f"SELECT [ID_VaiTro] from [tbsys_Users] where [Username] = '{st.session_state.username}'"
         mavaitro = ss.query_database_sqlite(sql_string=sql,data_type='value')
         st.session_state.mavaitro=mavaitro
 
