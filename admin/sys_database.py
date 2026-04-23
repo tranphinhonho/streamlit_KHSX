@@ -12,11 +12,15 @@ import json
 script_dir = os.path.dirname(os.path.abspath(__file__))
 config_path = os.path.join(script_dir, "config.json")
 
-with open(config_path, 'r', encoding='utf-8') as file:
-    data = json.load(file)
+# Load config nếu có (local dev). Trên Render sẽ không có file này.
+if os.path.exists(config_path):
+    with open(config_path, 'r', encoding='utf-8') as file:
+        data = json.load(file)
+else:
+    data = {}
 
-# Lấy đường dẫn database SQLite
-database_path = data.get('database_path', 'database.db')
+# Lấy đường dẫn database SQLite (chỉ cần khi chạy local)
+database_path = data.get('database_path', 'database_new.db')
 if not os.path.isabs(database_path):
     database_path = os.path.join(script_dir, database_path)
 
