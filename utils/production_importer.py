@@ -48,7 +48,8 @@ class ProductionImporter:
     
     def _get_connection(self) -> sqlite3.Connection:
         """Tạo connection đến database"""
-        return sqlite3.connect(self.db_path)
+        import admin.sys_database as db
+        return db.connect_db()
     
     def _ensure_import_log_table(self):
         """Tạo bảng EmailImportLog nếu chưa có"""

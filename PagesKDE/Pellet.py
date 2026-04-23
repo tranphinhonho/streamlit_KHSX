@@ -301,7 +301,7 @@ def app(selected):
                 importer = PelletCapacityImporter()
                 
                 # Lấy dữ liệu từ database
-                conn = sqlite3_local.connect('database_new.db')
+                conn = ss.connect_db()
                 
                 # Thống kê theo máy
                 query_by_machine = """
@@ -624,7 +624,7 @@ def app(selected):
                         import sqlite3 as sqlite3_avg
                         import numpy as np
                         
-                        conn_avg = sqlite3_avg.connect('database_new.db')
+                        conn_avg = ss.connect_db()
                         
                         # Lấy tất cả dữ liệu T/h theo sản phẩm (group by Code cám, lấy tất cả records)
                         query_all_th = """
@@ -833,7 +833,7 @@ def app(selected):
                                         df_unique = df_csv[['Tên cám', 'Vật nuôi']].drop_duplicates()
                                         
                                         import sqlite3
-                                        conn = sqlite3.connect('database_new.db')
+                                        conn = ss.connect_db()
                                         cursor = conn.cursor()
                                         updated = 0
                                         
@@ -865,7 +865,7 @@ def app(selected):
                             with st.spinner("Đang cập nhật Kwh/T..."):
                                 try:
                                     import sqlite3
-                                    conn = sqlite3.connect('database_new.db')
+                                    conn = ss.connect_db()
                                     cursor = conn.cursor()
                                     
                                     # Cập nhật Kwh/T từ dữ liệu tối ưu
@@ -1305,7 +1305,7 @@ def tinh_toan_phan_bo_pellet_v2(ngay_sx, DEFAULT_MACHINES):
     """
     from utils.pellet_capacity_importer import PelletCapacityImporter
     
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     
     # Lấy kế hoạch từ bảng Plan
     query = """

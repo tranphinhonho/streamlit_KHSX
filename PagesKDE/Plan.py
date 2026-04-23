@@ -14,7 +14,7 @@ def process_import_plan(df):
         st.error("❌ File Excel phải có cột 'Số lượng'")
         return None
     
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     result_data = []
     not_found = []
     
@@ -110,7 +110,7 @@ def app(selected):
                 transfer_df = pd.DataFrame(transfer_info['data'])
                 
                 # Tìm ID sản phẩm từ Tên cám
-                conn = sqlite3.connect('database_new.db')
+                conn = ss.connect_db()
                 cursor = conn.cursor()
                 
                 processed_data = []
@@ -332,7 +332,7 @@ def app(selected):
             )
         
         # Tính tổng sản lượng
-        conn = sqlite3.connect('database_new.db')
+        conn = ss.connect_db()
         cursor = conn.cursor()
         ngay_str = ngay_tong.strftime('%Y-%m-%d')
         ngay_str_alt = ngay_tong.strftime('%d/%m/%Y')
@@ -377,7 +377,7 @@ def app(selected):
         
         with col_pellet2:
             if st.button("📤 Chuyển qua Pellet Plan", type="primary", key="btn_transfer_pellet"):
-                conn = sqlite3.connect('database_new.db')
+                conn = ss.connect_db()
                 cursor = conn.cursor()
                 
                 ngay_str = ngay_chuyen.strftime('%Y-%m-%d')
@@ -422,7 +422,7 @@ def app(selected):
                     }
                     
                     # Thống kê
-                    cursor_count = sqlite3.connect('database_new.db').cursor()
+                    cursor_count = ss.connect_db().cursor()
                     cursor_count.execute("""
                         SELECT COUNT(*) FROM Plan 
                         WHERE [Đã xóa] = 0 AND ([Ngày plan] = ? OR [Ngày plan] = ?)
@@ -458,7 +458,7 @@ def app(selected):
             ngay_xoa = st.date_input("Chọn ngày cần xóa", value=fn.get_vietnam_time().date(), help="Chọn ngày để lọc plan", key="date_delete_plan")
         
         # Lấy danh sách Mã plan theo ngày
-        conn = sqlite3.connect('database_new.db')
+        conn = ss.connect_db()
         cursor = conn.cursor()
         ngay_str = ngay_xoa.strftime('%Y-%m-%d')
         ngay_str_alt = ngay_xoa.strftime('%d/%m/%Y')
@@ -492,7 +492,7 @@ def app(selected):
         with col3:
             if ma_plan_list:
                 if st.button("🗑️ Xóa", type="secondary", key="btn_delete_plan"):
-                    conn = sqlite3.connect('database_new.db')
+                    conn = ss.connect_db()
                     cursor = conn.cursor()
                     
                     if selected_ma_plan:
@@ -517,7 +517,7 @@ def app(selected):
             col_yes, col_no = st.columns(2)
             with col_yes:
                 if st.button("✅ Xác nhận XÓA", type="primary", key="confirm_yes_maplan"):
-                    conn = sqlite3.connect('database_new.db')
+                    conn = ss.connect_db()
                     cursor = conn.cursor()
                     cursor.execute("UPDATE Plan SET [Đã xóa] = 1, [Người sửa] = ?, [Thời gian sửa] = ? WHERE [Mã plan] = ? AND [Đã xóa] = 0", 
                                    (st.session_state.username, fn.get_vietnam_time(), ma_plan))
@@ -542,7 +542,7 @@ def app(selected):
             col_yes, col_no = st.columns(2)
             with col_yes:
                 if st.button("✅ Xác nhận XÓA", type="primary", key="confirm_yes"):
-                    conn = sqlite3.connect('database_new.db')
+                    conn = ss.connect_db()
                     cursor = conn.cursor()
                     ngay_str = ngay.strftime('%Y-%m-%d')
                     ngay_str_alt = ngay.strftime('%d/%m/%Y')
@@ -562,7 +562,7 @@ def app(selected):
 
 def tinh_toan_ke_hoach(ngay_ke_hoach):
     try:
-        conn = sqlite3.connect('database_new.db')
+        conn = ss.connect_db()
         cursor = conn.cursor()
         ngay_str = ngay_ke_hoach.strftime('%Y-%m-%d')
         ngay_str_alt = ngay_ke_hoach.strftime('%d/%m/%Y')
@@ -740,7 +740,7 @@ def hien_thi_ke_hoach(ke_hoach, ngay):
 
 def luu_ke_hoach(ke_hoach, ngay):
     try:
-        conn = sqlite3.connect('database_new.db')
+        conn = ss.connect_db()
         cursor = conn.cursor()
         cursor.execute("SELECT MAX([Mã plan]) FROM Plan WHERE [Mã plan] LIKE 'PL%'")
         result = cursor.fetchone()[0]

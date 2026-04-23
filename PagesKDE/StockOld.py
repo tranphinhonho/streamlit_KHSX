@@ -281,7 +281,7 @@ def app(selected):
                             })
                     
                     # Kết nối database
-                    conn = sqlite3.connect("database_new.db")
+                    conn = ss.connect_db()
                     cursor = conn.cursor()
                     
                     # Tạo mã Stock Old

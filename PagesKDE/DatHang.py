@@ -24,7 +24,7 @@ def process_import_by_product_name(df, loai_dathang, khach_vang_lai=0):
         st.error("❌ File Excel phải có cột 'Số lượng'")
         return None
     
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     result_data = []
     not_found = []
     
@@ -98,7 +98,7 @@ def process_import_by_code_cam(df, loai_dathang, khach_vang_lai=0):
         return None
         
     # Lấy ID sản phẩm từ Code cám
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     
     result_data = []
     not_found = []

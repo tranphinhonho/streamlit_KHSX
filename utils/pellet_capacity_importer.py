@@ -47,7 +47,8 @@ class PelletCapacityImporter:
         self._ensure_table()
     
     def _get_connection(self):
-        return sqlite3.connect(self.db_path)
+        import admin.sys_database as db
+        return db.connect_db()
     
     def _ensure_table(self):
         """Đảm bảo bảng PelletCapacity tồn tại"""

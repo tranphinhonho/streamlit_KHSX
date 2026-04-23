@@ -65,7 +65,7 @@ def app(selected):
             from datetime import datetime
             
             try:
-                conn = sqlite3.connect("database_new.db")
+                conn = ss.connect_db()
                 cursor = conn.cursor()
                 
                 # Lấy tất cả sản phẩm
@@ -327,7 +327,7 @@ def app(selected):
                     import sqlite3
                     from datetime import datetime
                     
-                    conn = sqlite3.connect("database_new.db")
+                    conn = ss.connect_db()
                     cursor = conn.cursor()
                     
                     # Chỉ xóa dữ liệu của ngày đang tính toán (không xóa các ngày khác)
@@ -507,7 +507,7 @@ def app(selected):
     days_in_month = calendar.monthrange(current_year, current_month)[1]
     
     # Query các ngày đã có stock
-    conn = sqlite3.connect("database_new.db")
+    conn = ss.connect_db()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT DISTINCT strftime('%d', [Ngày stock]) as day
@@ -583,7 +583,7 @@ def app(selected):
         # === CẢNH BÁO KVL MỚI ===
         # Kiểm tra xem có đơn KVL nào cho ngày hôm nay không
         import sqlite3
-        conn_kvl = sqlite3.connect('database_new.db')
+        conn_kvl = ss.connect_db()
         cursor_kvl = conn_kvl.cursor()
         today_str = fn.get_vietnam_time().strftime('%Y-%m-%d')
         cursor_kvl.execute("""
@@ -756,7 +756,7 @@ def app(selected):
             import sqlite3
             from datetime import datetime, timedelta
             
-            conn = sqlite3.connect("database_new.db")
+            conn = ss.connect_db()
             cursor = conn.cursor()
             
             # Lấy danh sách ID sản phẩm từ dataframe
@@ -947,7 +947,7 @@ def app(selected):
         from datetime import datetime, timedelta
         import math
         
-        conn = sqlite3.connect('database_new.db')
+        conn = ss.connect_db()
         cursor = conn.cursor()
         
         # Lấy ngày stock hiện tại đang hiển thị
@@ -1161,7 +1161,7 @@ def app(selected):
             import sqlite3
             from datetime import timedelta
             
-            conn = sqlite3.connect('database_new.db')
+            conn = ss.connect_db()
             cursor = conn.cursor()
             
             plan_data = []

@@ -205,7 +205,7 @@ def app(selected):
         else:
             # Lấy ngày gần nhất có dữ liệu trong BagStock
             try:
-                conn_check = sqlite3.connect('database_new.db')
+                conn_check = ss.connect_db()
                 cursor = conn_check.cursor()
                 cursor.execute("SELECT MAX(NgayStock) FROM BagStock WHERE DaXoa = 0")
                 latest = cursor.fetchone()[0]
@@ -243,7 +243,7 @@ def app(selected):
         from_lichthang = 'bagstock_filter_date' in st.session_state and st.session_state.bagstock_filter_date
         # Luôn load dữ liệu - True by default
         if True:
-            conn = sqlite3.connect('database_new.db')
+            conn = ss.connect_db()
             
             # Query với điều kiện tìm kiếm
             if search_term:
@@ -363,7 +363,7 @@ def get_warning_icon(muc_canh_bao):
 
 def tinh_nhu_cau_tu_packing(ngay):
     """Tính nhu cầu bao bì từ kế hoạch đóng bao"""
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     
     query = """
     SELECT 
@@ -391,7 +391,7 @@ def tinh_nhu_cau_tu_packing(ngay):
 
 def kiem_tra_ton_kho(ngay):
     """Kiểm tra tồn kho từ BagStock và so sánh với nhu cầu từ Packing Plan"""
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     
     # Lấy tồn kho từ BagStock (dữ liệu import từ email)
     # Lấy dữ liệu gần nhất với ngày được chọn

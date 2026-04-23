@@ -466,7 +466,7 @@ def app(selected):
         # Lấy ngày gần nhất có dữ liệu
         import sqlite3
         try:
-            conn_check = sqlite3.connect('database_new.db')
+            conn_check = ss.connect_db()
             cursor = conn_check.cursor()
             cursor.execute("SELECT MAX([Ngày kiểm kho]) FROM TonBon WHERE [Đã xóa] = 0")
             latest = cursor.fetchone()[0]
@@ -570,7 +570,7 @@ def app(selected):
         
         try:
             import sqlite3
-            conn = sqlite3.connect('database_new.db')
+            conn = ss.connect_db()
             
             # Điều kiện lọc theo ngày
             date_condition = ""

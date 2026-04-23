@@ -52,7 +52,8 @@ class SiloImporter:
     
     def _get_connection(self):
         """Tạo connection đến database"""
-        return sqlite3.connect(self.db_path)
+        import admin.sys_database as db
+        return db.connect_db()
     
     def _is_xlsx_file(self, file_path: str | Path) -> bool:
         """Kiểm tra file có phải là .xlsx (không có VBA) hay không"""

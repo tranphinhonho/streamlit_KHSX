@@ -176,7 +176,7 @@ def tao_ke_hoach_packing(ngay_packing):
     Tạo kế hoạch đóng bao từ dữ liệu Pellet
     Ánh xạ Pellet machine → Packing line
     """
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     
     # Lấy dữ liệu Pellet
     query = """

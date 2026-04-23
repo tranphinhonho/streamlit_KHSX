@@ -37,11 +37,12 @@ if IS_POSTGRES:
 def connect_db():
     """
     Kết nối database. Tự động chọn SQLite hoặc PostgreSQL.
+    Trả về connection wrapper tự động adapt SQL cho PostgreSQL.
     """
     if IS_POSTGRES:
         try:
             conn = psycopg2.connect(DATABASE_URL)
-            return conn
+            return AdaptedConnection(conn)
         except Exception as e:
             raise ConnectionError(f"Không thể kết nối PostgreSQL: {e}")
     else:
@@ -51,6 +52,81 @@ def connect_db():
             return conn
         except Exception as e:
             raise ConnectionError(f"Không thể kết nối SQLite tại {database_path}: {e}")
+
+
+def adapt_placeholder(sql):
+    """Chuyển đổi placeholder từ SQLite (?) sang PostgreSQL (%s)."""
+    if not IS_POSTGRES:
+        return sql
+    return sql.replace('?', '%s')
+
+
+class AdaptedCursor:
+    """Cursor wrapper tự động adapt SQL cho PostgreSQL."""
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, sql, params=None):
+        adapted = adapt_sql(sql)
+        if IS_POSTGRES:
+            adapted = adapt_placeholder(adapted)
+        if params:
+            return self._cursor.execute(adapted, params)
+        return self._cursor.execute(adapted)
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def description(self):
+        return self._cursor.description
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    def close(self):
+        return self._cursor.close()
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+
+class AdaptedConnection:
+    """Connection wrapper trả về AdaptedCursor thay vì cursor gốc."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self, **kwargs):
+        return AdaptedCursor(self._conn.cursor(**kwargs))
+
+    def execute(self, sql, params=None):
+        """For pd.read_sql_query() compatibility."""
+        adapted = adapt_sql(sql)
+        if IS_POSTGRES:
+            adapted = adapt_placeholder(adapted)
+        cursor = self._conn.cursor()
+        if params:
+            return cursor.execute(adapted, params)
+        return cursor.execute(adapted)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
 
 def get_cursor(conn):

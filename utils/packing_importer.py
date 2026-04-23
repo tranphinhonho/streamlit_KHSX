@@ -37,7 +37,8 @@ class PackingImporter:
     
     def _get_connection(self):
         """Tạo connection đến database"""
-        return sqlite3.connect(self.db_path)
+        import admin.sys_database as db
+        return db.connect_db()
     
     def get_available_sheets(self, file_path: str | Path = None) -> List[str]:
         """

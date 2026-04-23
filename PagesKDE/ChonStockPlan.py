@@ -23,7 +23,7 @@ def app(selected):
     import calendar
     from datetime import timedelta
     
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     cursor = conn.cursor()
     
     # Lấy năm và tháng hiện tại
@@ -226,7 +226,7 @@ def app(selected):
             import sqlite3
             from datetime import datetime, timedelta
             
-            conn = sqlite3.connect('database_new.db')
+            conn = ss.connect_db()
             cursor = conn.cursor()
             
             today = datetime.now().date()
@@ -377,7 +377,7 @@ def app(selected):
             import sqlite3
             from datetime import timedelta
             
-            conn = sqlite3.connect('database_new.db')
+            conn = ss.connect_db()
             cursor = conn.cursor()
             
             plan_data = []

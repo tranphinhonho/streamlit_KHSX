@@ -27,7 +27,7 @@ def get_plan_data_for_date(ngay_plan):
     Lấy dữ liệu Plan từ database theo ngày
     Returns: DataFrame với columns [ID sản phẩm, Code cám, Tên cám, Số lượng, Dạng ép viên]
     """
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     
     # Format ngày
     if isinstance(ngay_plan, str):
@@ -68,7 +68,7 @@ def get_pellet_capacity(code_cam=None):
     Lấy T/h tối ưu từ bảng PelletCapacity
     Returns: Dict {machine: {code_cam: T/h}}
     """
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     
     if code_cam:
         query = """
@@ -298,7 +298,7 @@ def save_pellet_plan(plan_data, ngay_plan, nguoi_tao='system'):
     """
     Lưu phân bổ Pellet Plan vào database
     """
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     cursor = conn.cursor()
     
     # Tạo bảng nếu chưa có
@@ -347,7 +347,7 @@ def get_saved_pellet_plan(ngay_plan):
     """
     Lấy Pellet Plan đã lưu từ database
     """
-    conn = sqlite3.connect('database_new.db')
+    conn = ss.connect_db()
     
     ngay_str = ngay_plan if isinstance(ngay_plan, str) else ngay_plan.strftime('%Y-%m-%d')
     
