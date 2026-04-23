@@ -4,6 +4,7 @@ pandas
 numpy
 openpyxl
 plotly
+pytz
 
 # UI Components
 streamlit_option_menu
@@ -13,9 +14,6 @@ streamlit-paste-button
 # Authentication
 streamlit_authenticator==0.3.3
 bcrypt
-
-# AI
-google-generativeai
 
 # Images
 Pillow
@@ -32,8 +30,5 @@ google-auth-oauthlib
 # PostgreSQL (Neontech)
 psycopg2-binary
 
-# Environment Variables
-python-dotenv
-
 # Note: pywin32 removed - not compatible with Linux (Streamlit Cloud)
-# Outlook email features will use file upload instead on cloud
+# Outlook email features will use file upload instead on cloud
