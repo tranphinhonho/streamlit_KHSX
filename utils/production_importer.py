@@ -63,8 +63,8 @@ class ProductionImporter:
                 NgayEmail DATE,
                 LoaiFile TEXT NOT NULL,
                 SoLuongDong INTEGER DEFAULT 0,
-                ThoiGianImport DATETIME DEFAULT CURRENT_TIMESTAMP,
-                NguoiImport TEXT
+                [ThoiGianImport] DATETIME DEFAULT CURRENT_TIMESTAMP,
+                [NguoiImport] TEXT
             )
         """)
         
@@ -84,7 +84,7 @@ class ProductionImporter:
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT ID FROM EmailImportLog WHERE TenFile = ?",
+            "SELECT [ID] FROM EmailImportLog WHERE [TenFile] = ?",
             (filename,)
         )
         
@@ -109,7 +109,7 @@ class ProductionImporter:
         
         cursor.execute("""
             INSERT INTO EmailImportLog 
-            (TenFile, NgayEmail, LoaiFile, SoLuongDong, NguoiImport)
+            ([TenFile], [NgayEmail], [LoaiFile], [SoLuongDong], [NguoiImport])
             VALUES (?, ?, ?, ?, ?)
         """, (filename, ngay_email, loai_file, so_luong, nguoi_import))
         
@@ -219,7 +219,7 @@ class ProductionImporter:
         
         # Xóa log import cũ
         cursor.execute("""
-            DELETE FROM EmailImportLog WHERE TenFile = ?
+            DELETE FROM EmailImportLog WHERE [TenFile] = ?
         """, (filename,))
         
         conn.commit()
@@ -943,16 +943,16 @@ class ProductionImporter:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT ID, TenFile, NgayEmail, LoaiFile, SoLuongDong, 
-                   ThoiGianImport, NguoiImport
+            SELECT [ID], [TenFile], [NgayEmail], [LoaiFile], [SoLuongDong], 
+                   [ThoiGianImport], [NguoiImport]
             FROM EmailImportLog
             WHERE LoaiFile = 'PRODUCTION'
-            ORDER BY ThoiGianImport DESC
+            ORDER BY [ThoiGianImport] DESC
             LIMIT ?
         """, (limit,))
         
         columns = ['ID', 'TenFile', 'NgayEmail', 'LoaiFile', 
-                   'SoLuongDong', 'ThoiGianImport', 'NguoiImport']
+                   'SoLuongDong', '[ThoiGianImport]', '[NguoiImport]']
         
         results = []
         for row in cursor.fetchall():

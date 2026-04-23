@@ -6,6 +6,7 @@ Với 7 máy (PL1-PL7) x 3 ca (CA1, CA2, CA3)
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
+import admin.sys_sqlite as ss
 
 # Default công suất máy (tấn/giờ)
 DEFAULT_MACHINES = {

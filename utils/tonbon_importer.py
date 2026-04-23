@@ -60,8 +60,8 @@ class TonBonImporter:
                 NgayEmail DATE,
                 LoaiFile TEXT NOT NULL,
                 SoLuongDong INTEGER DEFAULT 0,
-                ThoiGianImport DATETIME DEFAULT CURRENT_TIMESTAMP,
-                NguoiImport TEXT
+                [ThoiGianImport] DATETIME DEFAULT CURRENT_TIMESTAMP,
+                [NguoiImport] TEXT
             )
         """)
         
@@ -530,7 +530,7 @@ class TonBonImporter:
         
         cursor.execute("""
             INSERT INTO EmailImportLog 
-            (TenFile, NgayEmail, LoaiFile, SoLuongDong, NguoiImport)
+            ([TenFile], [NgayEmail], [LoaiFile], [SoLuongDong], [NguoiImport])
             VALUES (?, ?, ?, ?, ?)
         """, (unique_filename, ngay_email, loai_file, so_luong, nguoi_import))
         

@@ -70,8 +70,8 @@ class BagReportImporter:
                 NgayEmail DATE,
                 LoaiFile TEXT NOT NULL,
                 SoLuongDong INTEGER DEFAULT 0,
-                ThoiGianImport DATETIME DEFAULT CURRENT_TIMESTAMP,
-                NguoiImport TEXT
+                [ThoiGianImport] DATETIME DEFAULT CURRENT_TIMESTAMP,
+                [NguoiImport] TEXT
             )
         """)
         
@@ -91,7 +91,7 @@ class BagReportImporter:
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT ID FROM EmailImportLog WHERE TenFile = ? AND LoaiFile = 'BAG_REPORT'",
+            "SELECT [ID] FROM EmailImportLog WHERE [TenFile] = ? AND LoaiFile = 'BAG_REPORT'",
             (filename,)
         )
         
@@ -115,7 +115,7 @@ class BagReportImporter:
         
         cursor.execute("""
             INSERT INTO EmailImportLog 
-            (TenFile, NgayEmail, LoaiFile, SoLuongDong, NguoiImport)
+            ([TenFile], [NgayEmail], [LoaiFile], [SoLuongDong], [NguoiImport])
             VALUES (?, ?, 'BAG_REPORT', ?, ?)
         """, (filename, ngay_email, so_luong, nguoi_import))
         
@@ -383,15 +383,15 @@ class BagReportImporter:
         
         cursor.execute("""
             SELECT ID, TenFile, NgayEmail, SoLuongDong, 
-                   ThoiGianImport, NguoiImport
+                   [ThoiGianImport], [NguoiImport]
             FROM EmailImportLog
             WHERE LoaiFile = 'BAG_REPORT'
-            ORDER BY ThoiGianImport DESC
+            ORDER BY [ThoiGianImport] DESC
             LIMIT ?
         """, (limit,))
         
         columns = ['ID', 'TenFile', 'NgayEmail', 'SoLuongDong', 
-                   'ThoiGianImport', 'NguoiImport']
+                   '[ThoiGianImport]', '[NguoiImport]']
         
         results = []
         for row in cursor.fetchall():

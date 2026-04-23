@@ -69,14 +69,7 @@ class StockImporter:
         cursor = conn.cursor()
         
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS EmailImportLog (
-                ID INTEGER PRIMARY KEY AUTOINCREMENT,
-                TenFile TEXT NOT NULL UNIQUE,
-                NgayEmail DATE,
-                LoaiFile TEXT NOT NULL,
-                SoLuongDong INTEGER DEFAULT 0,
-                ThoiGianImport DATETIME DEFAULT CURRENT_TIMESTAMP,
-                NguoiImport TEXT
+            CREATE TABLE IF NOT EXISTS EmailImportLog (`n                [ID] INTEGER PRIMARY KEY AUTOINCREMENT,`n                [TenFile] TEXT NOT NULL UNIQUE,`n                [NgayEmail] DATE,`n                [LoaiFile] TEXT NOT NULL,`n                [SoLuongDong] INTEGER DEFAULT 0,`n                [ThoiGianImport] DATETIME DEFAULT CURRENT_TIMESTAMP,`n                [NguoiImport] TEXT
             )
         """)
         
@@ -96,7 +89,7 @@ class StockImporter:
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT ID FROM EmailImportLog WHERE TenFile = ?",
+            "SELECT [ID] FROM EmailImportLog WHERE [TenFile] = ?",
             (filename,)
         )
         
@@ -121,7 +114,7 @@ class StockImporter:
         
         cursor.execute("""
             INSERT INTO EmailImportLog 
-            (TenFile, NgayEmail, LoaiFile, SoLuongDong, NguoiImport)
+            ([TenFile], [NgayEmail], [LoaiFile], [SoLuongDong], [NguoiImport])
             VALUES (?, ?, ?, ?, ?)
         """, (filename, ngay_email, loai_file, so_luong, nguoi_import))
         
@@ -140,7 +133,7 @@ class StockImporter:
         
         # Lấy thông tin log cũ
         cursor.execute("""
-            SELECT NgayEmail FROM EmailImportLog WHERE TenFile = ?
+            SELECT [NgayEmail] FROM EmailImportLog WHERE [TenFile] = ?
         """, (filename,))
         result = cursor.fetchone()
         
@@ -162,7 +155,7 @@ class StockImporter:
             
             # Xóa log import cũ
             cursor.execute("""
-                DELETE FROM EmailImportLog WHERE TenFile = ?
+                DELETE FROM EmailImportLog WHERE [TenFile] = ?
             """, (filename,))
             print(f"[DEL] Da xoa log import cu: {filename}")
         
@@ -629,15 +622,15 @@ class StockImporter:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT ID, TenFile, NgayEmail, LoaiFile, SoLuongDong, 
-                   ThoiGianImport, NguoiImport
+            SELECT [ID], [TenFile], [NgayEmail], [LoaiFile], [SoLuongDong], 
+                   [ThoiGianImport], [NguoiImport]
             FROM EmailImportLog
-            ORDER BY ThoiGianImport DESC
+            ORDER BY [ThoiGianImport] DESC
             LIMIT ?
         """, (limit,))
         
         columns = ['ID', 'TenFile', 'NgayEmail', 'LoaiFile', 
-                   'SoLuongDong', 'ThoiGianImport', 'NguoiImport']
+                   'SoLuongDong', '[ThoiGianImport]', '[NguoiImport]']
         
         results = []
         for row in cursor.fetchall():

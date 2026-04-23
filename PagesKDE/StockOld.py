@@ -59,72 +59,80 @@ def app(selected):
     
     # Hiển thị thông báo và biểu đồ trên cùng 1 dòng
     if filter_date:
-        parts = filter_date.split('-')
-        if len(parts) == 3:
-            day = int(parts[2])
-            month = int(parts[1])
-            year = int(parts[0])
+        # PostgreSQL trả về date object, SQLite trả về string
+        if hasattr(filter_date, 'strftime'):
+            day = filter_date.day
+            month = filter_date.month
+            year = filter_date.year
+        else:
+            parts = str(filter_date).split('-')
+            if len(parts) == 3:
+                day = int(parts[2])
+                month = int(parts[1])
+                year = int(parts[0])
+            else:
+                day, month, year = 1, 1, 2020
+        
+        col_info, col_table, col_chart = st.columns([1, 1, 2])
+        
+        with col_info:
+            st.info(f"""
+            📅 **Ngày: {day:02d}/{month:02d}/{year}**
             
-            col_info, col_table, col_chart = st.columns([1, 1, 2])
+            Dữ liệu lọc theo ngày **{filter_date}**.
+            """)
             
-            with col_info:
-                st.info(f"""
-                📅 **Ngày: {day:02d}/{month:02d}/{year}**
+            if st.button("🔄 Xóa bộ lọc ngày", key="clear_filter_stockold"):
+                st.session_state.filter_date = None
+                st.session_state.navigate_to = None
+                st.rerun()
+        
+        # Lấy dữ liệu biểu đồ theo ngày filter
+        df_chart = get_stock_by_vatnuoi(filter_date)
+        
+        with col_table:
+            # Bảng tóm tắt
+            st.markdown("**📋 Tóm tắt tồn kho:**")
+            if df_chart is not None and len(df_chart) > 0:
+                df_chart = df_chart.sort_values('TongKg', ascending=False)
+                df_chart['Label'] = df_chart['Vật nuôi'].map(VAT_NUOI_LABELS)
+                df_chart['Color'] = df_chart['Vật nuôi'].map(VAT_NUOI_COLORS)
                 
-                Dữ liệu lọc theo ngày **{filter_date}**.
-                """)
+                # Tạo bảng tóm tắt
+                total_kg = df_chart['TongKg'].sum()
+                for _, row in df_chart.iterrows():
+                    pct = (row['TongKg'] / total_kg * 100) if total_kg > 0 else 0
+                    st.markdown(f"**{row['Label']}**: {row['TongKg']:,.0f} kg ({pct:.1f}%)")
+                st.markdown("---")
+                st.markdown(f"**TỔNG CỘNG: {total_kg:,.0f} kg**")
+            else:
+                st.warning("Không có dữ liệu")
+        
+        with col_chart:
+            if df_chart is not None and len(df_chart) > 0:
+                # Tạo pie chart với số kg - labels bên ngoài
+                fig = go.Figure(data=[go.Pie(
+                    labels=df_chart['Label'],
+                    values=df_chart['TongKg'],
+                    textinfo='percent',
+                    texttemplate='%{percent:.1%}',
+                    textposition='inside',
+                    hovertemplate='<b>%{label}</b><br>%{value:,.0f} kg<br>%{percent}<extra></extra>',
+                    marker_colors=df_chart['Color'].tolist(),
+                    pull=[0.02] * len(df_chart)
+                )])
                 
-                if st.button("🔄 Xóa bộ lọc ngày", key="clear_filter_stockold"):
-                    st.session_state.filter_date = None
-                    st.session_state.navigate_to = None
-                    st.rerun()
-            
-            # Lấy dữ liệu biểu đồ theo ngày filter
-            df_chart = get_stock_by_vatnuoi(filter_date)
-            
-            with col_table:
-                # Bảng tóm tắt
-                st.markdown("**📋 Tóm tắt tồn kho:**")
-                if df_chart is not None and len(df_chart) > 0:
-                    df_chart = df_chart.sort_values('TongKg', ascending=False)
-                    df_chart['Label'] = df_chart['Vật nuôi'].map(VAT_NUOI_LABELS)
-                    df_chart['Color'] = df_chart['Vật nuôi'].map(VAT_NUOI_COLORS)
-                    
-                    # Tạo bảng tóm tắt
-                    total_kg = df_chart['TongKg'].sum()
-                    for _, row in df_chart.iterrows():
-                        pct = (row['TongKg'] / total_kg * 100) if total_kg > 0 else 0
-                        st.markdown(f"**{row['Label']}**: {row['TongKg']:,.0f} kg ({pct:.1f}%)")
-                    st.markdown("---")
-                    st.markdown(f"**TỔNG CỘNG: {total_kg:,.0f} kg**")
-                else:
-                    st.warning("Không có dữ liệu")
-            
-            with col_chart:
-                if df_chart is not None and len(df_chart) > 0:
-                    # Tạo pie chart với số kg - labels bên ngoài
-                    fig = go.Figure(data=[go.Pie(
-                        labels=df_chart['Label'],
-                        values=df_chart['TongKg'],
-                        textinfo='percent',
-                        texttemplate='%{percent:.1%}',
-                        textposition='inside',
-                        hovertemplate='<b>%{label}</b><br>%{value:,.0f} kg<br>%{percent}<extra></extra>',
-                        marker_colors=df_chart['Color'].tolist(),
-                        pull=[0.02] * len(df_chart)
-                    )])
-                    
-                    fig.update_layout(
-                        title=f"📊 Tồn kho ngày {day:02d}/{month:02d}/{year}",
-                        title_x=0.5,
-                        height=350,
-                        margin=dict(t=50, b=20, l=20, r=20),
-                        showlegend=False
-                    )
-                    
-                    st.plotly_chart(fig, width="stretch")
-                else:
-                    st.warning("Không có dữ liệu tồn kho cho ngày này")
+                fig.update_layout(
+                    title=f"📊 Tồn kho ngày {day:02d}/{month:02d}/{year}",
+                    title_x=0.5,
+                    height=350,
+                    margin=dict(t=50, b=20, l=20, r=20),
+                    showlegend=False
+                )
+                
+                st.plotly_chart(fig, width="stretch")
+            else:
+                st.warning("Không có dữ liệu tồn kho cho ngày này")
     else:
         # Không có filter - hiển thị biểu đồ theo ngày gần nhất
         latest_date = get_latest_stock_date()

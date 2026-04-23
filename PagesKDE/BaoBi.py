@@ -249,12 +249,12 @@ def app(selected):
             if search_term:
                 query = """
                 SELECT 
-                    TenCam as 'Tên cám',
-                    KichCoDongBao as 'Kích cỡ',
-                    SoLuongBaoBi as 'Số lượng bao',
-                    NgayStock as 'Ngày stock',
-                    TenFile as 'File nguồn',
-                    ThoiGianTao as 'Thời gian import'
+                    TenCam as [Tên cám],
+                    KichCoDongBao as [Kích cỡ],
+                    SoLuongBaoBi as [Số lượng bao],
+                    NgayStock as [Ngày stock],
+                    TenFile as [File nguồn],
+                    ThoiGianTao as [Thời gian import]
                 FROM BagStock
                 WHERE NgayStock = ?
                 AND DaXoa = 0
@@ -265,12 +265,12 @@ def app(selected):
             else:
                 query = """
                 SELECT 
-                    TenCam as 'Tên cám',
-                    KichCoDongBao as 'Kích cỡ',
-                    SoLuongBaoBi as 'Số lượng bao',
-                    NgayStock as 'Ngày stock',
-                    TenFile as 'File nguồn',
-                    ThoiGianTao as 'Thời gian import'
+                    TenCam as [Tên cám],
+                    KichCoDongBao as [Kích cỡ],
+                    SoLuongBaoBi as [Số lượng bao],
+                    NgayStock as [Ngày stock],
+                    TenFile as [File nguồn],
+                    ThoiGianTao as [Thời gian import]
                 FROM BagStock
                 WHERE NgayStock = ?
                 AND DaXoa = 0
@@ -397,10 +397,10 @@ def kiem_tra_ton_kho(ngay):
     # Lấy dữ liệu gần nhất với ngày được chọn
     query_stock = """
     SELECT 
-        TenCam as 'Tên cám',
-        KichCoDongBao as 'Kích cỡ (kg)',
-        SoLuongBaoBi as 'Tồn kho hiện tại',
-        NgayStock as 'Ngày stock'
+        TenCam as [Tên cám],
+        KichCoDongBao as [Kích cỡ (kg)],
+        SoLuongBaoBi as [Tồn kho hiện tại],
+        NgayStock as [Ngày stock]
     FROM BagStock
     WHERE NgayStock <= ?
     AND DaXoa = 0
