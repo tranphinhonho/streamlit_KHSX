@@ -49,7 +49,8 @@ def import_data(title='Đọc và hiển thị dữ liệu Excel', file_path='Ng
                 unique_columns=None, date_columns=None):
     # Hiển thị tiêu đề ứng dụng
     st.header(title, divider='rainbow')
-    fn.download_file(location=st, title='📥 Tải file excel mẫu', file_path=file_path, output_name=output_name)
+    if os.path.exists(file_path):
+        fn.download_file(location=st, title='📥 Tải file excel mẫu', file_path=file_path, output_name=output_name)
 
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = fn.get_timestamp()
