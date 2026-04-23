@@ -10,14 +10,14 @@ def app(selected_tab):
     # Lấy danh sách chức năng con và các liên kết hiện có
     sql_chucnang = """
         SELECT 
-            DSCN.ID as ID_DanhSachChucNang, 
+            DSCN.[ID] as [ID_DanhSachChucNang], 
             CNC.[Chức năng chính], 
             DSCN.[Chức năng con],
-            LKM.ModulePath,
+            LKM.[ModulePath],
             LKM.[Ghi chú]
         FROM tbsys_DanhSachChucNang as DSCN
-        LEFT JOIN tbsys_ChucNangChinh as CNC ON DSCN.[ID Chức năng chính] = CNC.ID AND CNC.[Đã xóa] = 0
-        LEFT JOIN tbsys_ModuleChucNang as LKM ON DSCN.ID = LKM.ID_DanhSachChucNang AND LKM.[Đã xóa] = 0
+        LEFT JOIN tbsys_ChucNangChinh as CNC ON DSCN.[ID Chức năng chính] = CNC.[ID] AND CNC.[Đã xóa] = 0
+        LEFT JOIN tbsys_ModuleChucNang as LKM ON DSCN.[ID] = LKM.[ID_DanhSachChucNang] AND LKM.[Đã xóa] = 0
         WHERE DSCN.[Đã xóa] = 0 
         ORDER BY CNC.[Thứ tự ưu tiên] ASC, DSCN.[Thứ tự ưu tiên] ASC
     """

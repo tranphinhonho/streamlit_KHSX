@@ -229,6 +229,17 @@ def adapt_sql(sql):
     
     # Thay TRIM([col]) - PostgreSQL cũng hỗ trợ TRIM
     
+    # Auto-quote alias.BareColumn patterns (e.g. CNC.ID → CNC."ID")
+    # Matches: alias.MixedCaseWord where word has at least one uppercase letter
+    result = re.sub(
+        r'(\b[a-zA-Z_]\w*\.)([A-Z][a-zA-Z0-9_]*)(?=[^"\w]|$)',
+        lambda m: m.group(1) + '"' + m.group(2) + '"' if '"' + m.group(2) + '"' not in m.group(0) else m.group(0),
+        result
+    )
+    
+    # Auto-quote single-quoted aliases: as 'Name' → as "Name"
+    result = re.sub(r"\bas\s+'([^']+)'", r'as "\1"', result)
+    
     return result
 
 
