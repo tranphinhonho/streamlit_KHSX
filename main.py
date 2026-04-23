@@ -287,11 +287,11 @@ if authentication_status:
         else:
             # Cơ chế động cho các chức năng khác
             sql_get_module = f"""
-                SELECT T2.ModulePath
-                FROM tbsys_DanhSachChucNang AS T1
-                LEFT JOIN tbsys_ModuleChucNang AS T2 ON T1.ID = T2.ID_DanhSachChucNang AND T2.[Đã xóa] = 0
+                SELECT T2.[ModulePath]
+                FROM [tbsys_DanhSachChucNang] AS T1
+                LEFT JOIN [tbsys_ModuleChucNang] AS T2 ON T1.[ID] = T2.[ID_DanhSachChucNang] AND T2.[Đã xóa] = 0
                 WHERE TRIM(T1.[Chức năng con]) = '{selected_tab.strip()}' AND T1.[Đã xóa] = 0
-                ORDER BY T2.ModulePath DESC
+                ORDER BY T2.[ModulePath] DESC
                 LIMIT 1
             """
             module_path = ss.query_database_sqlite(sql_string=sql_get_module, data_type='value')
